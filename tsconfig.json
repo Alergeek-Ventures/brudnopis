@@ -3,7 +3,8 @@
   "compilerOptions": {
     "strict": true,
     "paths": {
-      "@/*": ["./*"]
+      "@/*": ["./*"],
+      "drawing-canvas": ["./modules/drawing-canvas"]
     }
   },
   "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"]

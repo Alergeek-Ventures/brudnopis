@@ -1,0 +1,48 @@
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+
+group = 'expo.modules.drawingcanvas'
+
+def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.absolutePath, "ExpoModulesCorePlugin.gradle")
+if (expoModulesCorePlugin.exists()) {
+  apply from: expoModulesCorePlugin
+  applyKotlinExpoModulesCorePlugin()
+}
+
+android {
+  namespace "expo.modules.drawingcanvas"
+
+  compileSdkVersion safeExtGet("compileSdkVersion", 35)
+
+  defaultConfig {
+    minSdkVersion safeExtGet("minSdkVersion", 24)
+    targetSdkVersion safeExtGet("targetSdkVersion", 35)
+  }
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_17
+    targetCompatibility JavaVersion.VERSION_17
+  }
+
+  kotlinOptions {
+    jvmTarget = "17"
+  }
+}
+
+// No remote repositories needed — Onyx SDK is vendored as local JARs in libs/
+
+dependencies {
+  implementation project(':expo-modules-core')
+  implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:${rootProject.ext.has('kotlinVersion') ? rootProject.ext.get('kotlinVersion') : '2.1.20'}"
+
+  // Onyx Boox SDK — vendored as local JARs extracted from the AARs.
+  // We use JARs (not AARs) to avoid AndroidManifest merging that would
+  // register OnyxFileProvider and crash on boot. JARs contain only the
+  // classes we need (TouchHelper, RawInputCallback, TouchPoint, etc.)
+  // with no manifest, no resources, no transitive dependencies.
+  implementation fileTree(dir: 'libs', include: ['*.jar'])
+
+  // RxJava 2 — required at runtime by onyxsdk-base's internal RxManager
+  implementation 'io.reactivex.rxjava2:rxjava:2.2.21'
+  implementation 'io.reactivex.rxjava2:rxandroid:2.1.1'
+}

@@ -29,7 +29,7 @@
         }
       ],
       "expo-font",
-      "expo-image"
+      "./plugins/with-boox-sdk"
     ],
     "experiments": {
       "typedRoutes": true,
