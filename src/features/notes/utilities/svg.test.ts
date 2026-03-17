@@ -86,55 +86,98 @@ describe('serializeSvgDocument', () => {
     const pathCount = (svg.match(/<path /g) || []).length;
     expect(pathCount).toBe(0);
   });
+
+  it('does not include data-background for blank pattern', () => {
+    const svg = serializeSvgDocument([], 100, 100);
+    expect(svg).not.toContain('data-background');
+    expect(svg).not.toContain('<pattern');
+  });
+
+  it('includes dotted background pattern and data-background attribute', () => {
+    const svg = serializeSvgDocument([], 100, 100, 'dotted');
+    expect(svg).toContain('data-background="dotted"');
+    expect(svg).toContain('<defs>');
+    expect(svg).toContain('<pattern id="dotted-bg"');
+    expect(svg).toContain('patternUnits="userSpaceOnUse"');
+    expect(svg).toContain('<circle');
+    expect(svg).toContain('fill="url(#dotted-bg)"');
+    // White background rect before the dotted rect
+    expect(svg).toContain('fill="white"');
+  });
 });
 
 describe('parseSvgDocument', () => {
   it('parses strokes from SVG with data-points', () => {
     const svg = serializeSvgDocument(sampleStrokes, 1872, 2404);
-    const parsed = parseSvgDocument(svg);
-    expect(parsed).toHaveLength(2);
-    expect(parsed[0].points).toEqual(sampleStrokes[0].points);
-    expect(parsed[1].points).toEqual(sampleStrokes[1].points);
+    const { strokes } = parseSvgDocument(svg);
+    expect(strokes).toHaveLength(2);
+    expect(strokes[0].points).toEqual(sampleStrokes[0].points);
+    expect(strokes[1].points).toEqual(sampleStrokes[1].points);
   });
 
   it('extracts color and width', () => {
     const svg = serializeSvgDocument(sampleStrokes, 1872, 2404);
-    const parsed = parseSvgDocument(svg);
-    expect(parsed[0].color).toBe('#000000');
-    expect(parsed[0].width).toBe(3);
-    expect(parsed[1].color).toBe('#FF0000');
-    expect(parsed[1].width).toBe(5);
+    const { strokes } = parseSvgDocument(svg);
+    expect(strokes[0].color).toBe('#000000');
+    expect(strokes[0].width).toBe(3);
+    expect(strokes[1].color).toBe('#FF0000');
+    expect(strokes[1].width).toBe(5);
   });
 
   it('ignores paths without data-points', () => {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <path d="M0,0L100,100" stroke="#000" stroke-width="1" fill="none"/>
     </svg>`;
-    const parsed = parseSvgDocument(svg);
-    expect(parsed).toHaveLength(0);
+    const { strokes } = parseSvgDocument(svg);
+    expect(strokes).toHaveLength(0);
   });
 
-  it('returns empty array for non-SVG input', () => {
-    expect(parseSvgDocument('hello world')).toEqual([]);
-    expect(parseSvgDocument('')).toEqual([]);
+  it('returns empty strokes and blank background for non-SVG input', () => {
+    expect(parseSvgDocument('hello world')).toEqual({
+      strokes: [],
+      backgroundPattern: 'blank',
+    });
+    expect(parseSvgDocument('')).toEqual({
+      strokes: [],
+      backgroundPattern: 'blank',
+    });
   });
 
   it('defaults color to #000000 and width to 3 when missing', () => {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <path d="M0,0L10,10" data-points="0,0,0.50;10,10,0.50"/>
     </svg>`;
-    const parsed = parseSvgDocument(svg);
-    expect(parsed).toHaveLength(1);
-    expect(parsed[0].color).toBe('#000000');
-    expect(parsed[0].width).toBe(3);
+    const { strokes } = parseSvgDocument(svg);
+    expect(strokes).toHaveLength(1);
+    expect(strokes[0].color).toBe('#000000');
+    expect(strokes[0].width).toBe(3);
+  });
+
+  it('extracts dotted background pattern from data-background', () => {
+    const svg = serializeSvgDocument([], 100, 100, 'dotted');
+    const { backgroundPattern } = parseSvgDocument(svg);
+    expect(backgroundPattern).toBe('dotted');
+  });
+
+  it('defaults to blank when data-background is absent', () => {
+    const svg = serializeSvgDocument([], 100, 100);
+    const { backgroundPattern } = parseSvgDocument(svg);
+    expect(backgroundPattern).toBe('blank');
+  });
+
+  it('defaults to blank for unknown data-background values', () => {
+    const svg =
+      '<svg xmlns="http://www.w3.org/2000/svg" data-background="fancy" viewBox="0 0 100 100"></svg>';
+    const { backgroundPattern } = parseSvgDocument(svg);
+    expect(backgroundPattern).toBe('blank');
   });
 });
 
 describe('round-trip', () => {
   it('serialize → parse preserves all stroke data', () => {
     const svg = serializeSvgDocument(sampleStrokes, 1872, 2404);
-    const parsed = parseSvgDocument(svg);
-    expect(parsed).toEqual(sampleStrokes);
+    const { strokes } = parseSvgDocument(svg);
+    expect(strokes).toEqual(sampleStrokes);
   });
 
   it('round-trips a document with many strokes', () => {
@@ -148,7 +191,21 @@ describe('round-trip', () => {
       width: 3,
     }));
     const svg = serializeSvgDocument(strokes, 1872, 2404);
-    const parsed = parseSvgDocument(svg);
+    const { strokes: parsed } = parseSvgDocument(svg);
     expect(parsed).toEqual(strokes);
+  });
+
+  it('round-trips dotted background pattern', () => {
+    const svg = serializeSvgDocument(sampleStrokes, 1872, 2404, 'dotted');
+    const { strokes, backgroundPattern } = parseSvgDocument(svg);
+    expect(strokes).toEqual(sampleStrokes);
+    expect(backgroundPattern).toBe('dotted');
+  });
+
+  it('round-trips blank background pattern', () => {
+    const svg = serializeSvgDocument(sampleStrokes, 1872, 2404, 'blank');
+    const { strokes, backgroundPattern } = parseSvgDocument(svg);
+    expect(strokes).toEqual(sampleStrokes);
+    expect(backgroundPattern).toBe('blank');
   });
 });

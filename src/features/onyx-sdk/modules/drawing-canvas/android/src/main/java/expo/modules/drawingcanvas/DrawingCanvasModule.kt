@@ -8,7 +8,11 @@ class DrawingCanvasModule : Module() {
         Name("DrawingCanvas")
 
         View(DrawingCanvasView::class) {
-            Events("onStrokeEnd")
+            Events("onStrokeEnd", "onEraseEnd")
+
+            Prop("backgroundPattern") { view: DrawingCanvasView, pattern: String? ->
+                view.setBackgroundPattern(pattern ?: "blank")
+            }
 
             AsyncFunction("clear") { view: DrawingCanvasView ->
                 view.clear()

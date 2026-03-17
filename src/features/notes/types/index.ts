@@ -14,3 +14,6 @@ export type Stroke = {
   /** Stroke width in pixels. */
   width: number;
 };
+
+/** Canvas background pattern. Stored in SVG as `data-background` on the root element. */
+export type BackgroundPattern = 'blank' | 'dotted';

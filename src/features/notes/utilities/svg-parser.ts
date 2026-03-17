@@ -1,8 +1,15 @@
-import type { Stroke } from '../types';
+import type { BackgroundPattern, Stroke } from '../types';
+
 import { decodePoints } from './points';
 
+export type ParsedDocument = {
+  strokes: Stroke[];
+  /** Background pattern parsed from `data-background` on the root <svg> element. */
+  backgroundPattern: BackgroundPattern;
+};
+
 /**
- * Parse an SVG document string back into an array of Strokes.
+ * Parse an SVG document string back into strokes and metadata.
  *
  * Constraint: this parser only handles SVG produced by our own svg-serializer.
  * It uses regex to extract self-closing <path .../> elements. This will break
@@ -15,10 +22,18 @@ import { decodePoints } from './points';
  * Also extracts stroke color and width from the path attributes.
  * Falls back to defaults (#000000, 3) if not present.
  *
- * Returns empty array for invalid/empty SVG.
+ * Extracts `data-background` from the root <svg> element for background
+ * pattern metadata (e.g., "dotted"). Defaults to "blank".
+ *
+ * Returns empty strokes array and "blank" background for invalid/empty SVG.
  */
-export function parseSvgDocument(svg: string): Stroke[] {
+export function parseSvgDocument(svg: string): ParsedDocument {
   const strokes: Stroke[] = [];
+
+  // Extract background pattern from root <svg> element
+  const bgMatch = /data-background="([^"]*)"/.exec(svg);
+  const backgroundPattern: BackgroundPattern =
+    bgMatch && bgMatch[1] === 'dotted' ? bgMatch[1] : 'blank';
 
   // Match all <path ... /> elements (self-closing)
   const pathRegex = /<path\s([^>]*?)\/>/g;
@@ -44,5 +59,5 @@ export function parseSvgDocument(svg: string): Stroke[] {
     strokes.push({ points, color, width });
   }
 
-  return strokes;
+  return { strokes, backgroundPattern };
 }

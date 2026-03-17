@@ -23,19 +23,28 @@ export function Canvas() {
   return <CanvasContent fileUri={fileUri} />;
 }
 
+const BACKGROUND_PATTERN = 'dotted' as const;
+
 function CanvasContent({ fileUri }: { fileUri: string }) {
   const canvasRef = useRef<DrawingCanvasRef>(null);
 
-  const { handleStrokeEnd } = useDocument({
+  const { handleStrokeEnd, handleEraseEnd } = useDocument({
     fileUri,
     width: CANVAS_WIDTH,
     height: CANVAS_HEIGHT,
+    backgroundPattern: BACKGROUND_PATTERN,
     canvasRef,
   });
 
   return (
     <View className="flex-1 bg-white">
-      <DrawingCanvasView ref={canvasRef} className="flex-1" onStrokeEnd={handleStrokeEnd} />
+      <DrawingCanvasView
+        ref={canvasRef}
+        className="flex-1"
+        backgroundPattern={BACKGROUND_PATTERN}
+        onStrokeEnd={handleStrokeEnd}
+        onEraseEnd={handleEraseEnd}
+      />
     </View>
   );
 }

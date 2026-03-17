@@ -1,9 +1,14 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import type { DrawingCanvasRef, NativeStrokeData, StrokeEndEvent } from 'drawing-canvas';
+import type {
+  DrawingCanvasRef,
+  EraseEndEvent,
+  NativeStrokeData,
+  StrokeEndEvent,
+} from 'drawing-canvas';
 import { type RefObject, useEffect, useRef } from 'react';
 
 import { loadDocument, saveDocument } from '@/features/storage/utilities/storage';
-import type { Stroke } from '../types';
+import type { BackgroundPattern, Stroke } from '../types';
 import { decodePoints, encodePoints } from './points';
 import { parseSvgDocument } from './svg-parser';
 import { serializeSvgDocument } from './svg-serializer';
@@ -16,6 +21,8 @@ type UseDocumentOptions = {
   width: number;
   /** Canvas height in pixels (for SVG viewBox). */
   height: number;
+  /** Background pattern for this canvas. Saved into the SVG. */
+  backgroundPattern: BackgroundPattern;
   /** Ref to the native canvas — used to push loaded strokes. */
   canvasRef: RefObject<DrawingCanvasRef | null>;
 };
@@ -31,6 +38,11 @@ type UseDocumentResult = {
    * and triggers a debounced save.
    */
   handleStrokeEnd: (event: StrokeEndEvent) => void;
+  /**
+   * Handler for the native onEraseEnd event.
+   * Removes erased strokes by index from in-memory array and triggers save.
+   */
+  handleEraseEnd: (event: EraseEndEvent) => void;
 };
 
 const SAVE_DEBOUNCE_MS = 1000;
@@ -50,6 +62,7 @@ export function useDocument({
   fileUri,
   width,
   height,
+  backgroundPattern,
   canvasRef,
 }: UseDocumentOptions): UseDocumentResult {
   // Mutable ref to avoid re-renders on every stroke.
@@ -57,8 +70,8 @@ export function useDocument({
   const strokesRef = useRef<Stroke[]>([]);
 
   // Stable refs for save closure
-  const optionsRef = useRef({ fileUri, width, height });
-  optionsRef.current = { fileUri, width, height };
+  const optionsRef = useRef({ fileUri, width, height, backgroundPattern });
+  optionsRef.current = { fileUri, width, height, backgroundPattern };
 
   // ── Load ──────────────────────────────────────────────────────
 
@@ -66,9 +79,9 @@ export function useDocument({
     queryKey: ['document', fileUri],
     queryFn: async () => {
       const svg = await loadDocument(fileUri);
-      const strokes = parseSvgDocument(svg);
-      // Empty string from a new file parses to [] — that's fine.
-      return strokes;
+      const doc = parseSvgDocument(svg);
+      // Empty string from a new file parses to { strokes: [], backgroundPattern: "blank" }.
+      return doc;
     },
     enabled: !!fileUri,
     // Don't refetch in background — the in-memory strokesRef is the source
@@ -93,7 +106,7 @@ export function useDocument({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const strokes = documentQuery.data;
+    const { strokes } = documentQuery.data;
     strokesRef.current = strokes;
     hasSyncedRef.current = true;
 
@@ -113,8 +126,8 @@ export function useDocument({
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const { fileUri: uri, width: w, height: h } = optionsRef.current;
-      const svg = serializeSvgDocument(strokesRef.current, w, h);
+      const { fileUri: uri, width: w, height: h, backgroundPattern: bg } = optionsRef.current;
+      const svg = serializeSvgDocument(strokesRef.current, w, h, bg);
       await saveDocument(uri, svg);
     },
   });
@@ -146,9 +159,23 @@ export function useDocument({
     debouncedSave.schedule();
   };
 
+  // Same pattern as handleStrokeEnd — no useCallback needed.
+  // Indices arrive sorted descending from native, so splicing in
+  // order is safe (later indices removed first, earlier ones stay valid).
+  const handleEraseEnd = (event: EraseEndEvent) => {
+    const { indices } = event.nativeEvent;
+    if (indices.length === 0) return;
+
+    for (const index of indices) {
+      strokesRef.current.splice(index, 1);
+    }
+    debouncedSave.schedule();
+  };
+
   return {
     isLoading: documentQuery.isPending,
     isSaving: saveMutation.isPending,
     handleStrokeEnd,
+    handleEraseEnd,
   };
 }

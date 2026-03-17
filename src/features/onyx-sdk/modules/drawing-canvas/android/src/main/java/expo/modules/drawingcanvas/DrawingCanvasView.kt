@@ -6,6 +6,9 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.Rect
+import android.graphics.RectF
+import android.graphics.Region
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.ViewGroup
@@ -13,6 +16,20 @@ import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.viewevent.EventDispatcher
 import expo.modules.kotlin.views.ExpoView
 import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
+
+/**
+ * Retained stroke data for eraser hit-testing and bitmap redraw.
+ * Mirrors the JS-side Stroke type — kept in sync via index.
+ */
+private data class StrokeData(
+    val points: List<FloatArray>,
+    val color: Int,
+    val width: Float,
+    /** Pre-computed bounding box for fast eraser pre-filtering. */
+    val bounds: RectF,
+)
 
 /**
  * Native drawing canvas. Uses Onyx Boox SDK (via OnyxHelper) for
@@ -31,6 +48,7 @@ class DrawingCanvasView(
     override val shouldUseAndroidLayout: Boolean = true
 
     val onStrokeEnd by EventDispatcher()
+    val onEraseEnd by EventDispatcher()
 
     private var bitmap: Bitmap? = null
     private var bitmapCanvas: Canvas? = null
@@ -39,6 +57,15 @@ class DrawingCanvasView(
     // Accumulates points for the current stroke across multiple batches.
     // Each FloatArray is [x, y, pressure]. Cleared on stroke end.
     private val currentStrokePoints = mutableListOf<FloatArray>()
+
+    // Accumulates eraser path points across multiple batches.
+    // Each FloatArray is [x, y, pressure]. Cleared on erase end.
+    private val currentEraserPoints = mutableListOf<FloatArray>()
+
+    // Retained strokes for eraser hit-testing and bitmap redraw.
+    // Kept in sync with JS strokesRef by index — eraseEnd reports
+    // indices to splice, and new strokes are always appended.
+    private val strokes = mutableListOf<StrokeData>()
 
     private val strokePaint = Paint().apply {
         color = Color.BLACK
@@ -50,6 +77,32 @@ class DrawingCanvasView(
     }
 
     private val bitmapPaint = Paint()
+
+    // ── Background pattern ─────────────────────────────────────────
+
+    private var backgroundPattern: String = "blank"
+
+    /** Dot spacing in pixels. ~80px ≈ 9mm at 226 DPI (Boox standard). */
+    private val dotSpacing = 80f
+    /** Dot radius in pixels. */
+    private val dotRadius = 3f
+
+    private val dotPaint = Paint().apply {
+        color = Color.LTGRAY
+        style = Paint.Style.FILL
+        isAntiAlias = true
+        strokeCap = Paint.Cap.ROUND
+    }
+
+    // ── Eraser hit-testing ─────────────────────────────────────────
+
+    /** Paint used to expand the eraser path into a corridor via getFillPath. */
+    private val eraserExpansionPaint = Paint().apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 30f
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
 
     // OnyxHelper is typed as Any? to avoid referencing SDK types.
     // Actual type is OnyxHelper, loaded lazily in initTouchHelper().
@@ -65,7 +118,7 @@ class DrawingCanvasView(
 
             bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
             bitmapCanvas = Canvas(bitmap!!)
-            bitmapCanvas!!.drawColor(Color.WHITE)
+            drawBackground(bitmapCanvas!!, w, h)
             drawBitmapToSurface()
 
             initTouchHelper()
@@ -76,7 +129,7 @@ class DrawingCanvasView(
             if (oldBitmap != null && (oldBitmap.width != width || oldBitmap.height != height)) {
                 val newBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
                 val newCanvas = Canvas(newBitmap)
-                newCanvas.drawColor(Color.WHITE)
+                drawBackground(newCanvas, width, height)
                 newCanvas.drawBitmap(oldBitmap, 0f, 0f, bitmapPaint)
                 bitmap = newBitmap
                 bitmapCanvas = newCanvas
@@ -101,6 +154,49 @@ class DrawingCanvasView(
         surfaceView.layout(0, 0, r - l, b - t)
     }
 
+    // ── Background rendering ───────────────────────────────────────
+
+    /**
+     * Draw the canvas background (white fill + optional dot grid).
+     * Called from surfaceCreated, surfaceChanged, loadStrokes, clear,
+     * and after eraser redraw.
+     */
+    private fun drawBackground(canvas: Canvas, width: Int, height: Int) {
+        canvas.drawColor(Color.WHITE)
+
+        if (backgroundPattern == "dotted") {
+            drawDottedBackground(canvas, width, height)
+        }
+    }
+
+    /**
+     * Draw a dot grid pattern using drawPoints for efficiency.
+     * A single drawPoints call with Cap.ROUND renders all dots
+     * as circles — much faster than individual drawCircle calls.
+     */
+    private fun drawDottedBackground(canvas: Canvas, width: Int, height: Int) {
+        // Count dots to pre-allocate the float array
+        val cols = ((width - dotSpacing) / dotSpacing).toInt() + 1
+        val rows = ((height - dotSpacing) / dotSpacing).toInt() + 1
+        if (cols <= 0 || rows <= 0) return
+
+        // drawPoints takes pairs of (x, y) floats
+        val points = FloatArray(cols * rows * 2)
+        var idx = 0
+        for (row in 0 until rows) {
+            val y = dotSpacing + row * dotSpacing
+            for (col in 0 until cols) {
+                val x = dotSpacing + col * dotSpacing
+                points[idx++] = x
+                points[idx++] = y
+            }
+        }
+
+        // strokeWidth controls the dot diameter with Cap.ROUND
+        dotPaint.strokeWidth = dotRadius * 2
+        canvas.drawPoints(points, 0, idx, dotPaint)
+    }
+
     // ── Onyx integration (all SDK access via OnyxHelper) ───────────
 
     private fun initTouchHelper() {
@@ -109,6 +205,8 @@ class DrawingCanvasView(
                 surfaceView = surfaceView,
                 onStrokeDrawn = { points -> handleStrokePoints(points) },
                 onStrokeFinished = { refreshAfterStroke() },
+                onEraserDrawn = { points -> handleEraserPoints(points) },
+                onEraserFinished = { handleEraseEnd() },
             )
             helper.configure(strokePaint.strokeWidth, strokePaint.color, surfaceView.width, surfaceView.height)
             helper.openRawDrawing()
@@ -172,6 +270,16 @@ class DrawingCanvasView(
 
         // Serialize accumulated stroke points as "x,y,p;x,y,p;..." packed string
         val pointsString = serializePoints(currentStrokePoints)
+
+        // Retain stroke data for eraser hit-testing
+        val strokeData = StrokeData(
+            points = currentStrokePoints.map { it.copyOf() },
+            color = strokePaint.color,
+            width = strokePaint.strokeWidth,
+            bounds = computeBounds(currentStrokePoints),
+        )
+        strokes.add(strokeData)
+
         currentStrokePoints.clear()
 
         onStrokeEnd(mapOf(
@@ -180,6 +288,146 @@ class DrawingCanvasView(
             "color" to String.format("#%06X", 0xFFFFFF and strokePaint.color),
             "width" to strokePaint.strokeWidth,
         ))
+    }
+
+    // ── Eraser ─────────────────────────────────────────────────────
+
+    private fun handleEraserPoints(points: List<FloatArray>) {
+        if (points.isEmpty()) return
+        currentEraserPoints.addAll(points)
+    }
+
+    /**
+     * Called when the stylus eraser button is released.
+     * Hit-tests the eraser path against stored strokes, removes matches,
+     * redraws the bitmap (background + remaining strokes), and fires
+     * onEraseEnd to JS with the indices of erased strokes.
+     */
+    private fun handleEraseEnd() {
+        val eraserPath = currentEraserPoints.toList()
+        currentEraserPoints.clear()
+
+        if (eraserPath.isEmpty() || strokes.isEmpty()) return
+
+        val erasedIndices = findErasedStrokeIndices(eraserPath)
+        if (erasedIndices.isEmpty()) return
+
+        // Remove erased strokes in reverse order to keep indices valid
+        for (index in erasedIndices) {
+            strokes.removeAt(index)
+        }
+        strokeCount = strokes.size
+
+        // Redraw: background + remaining strokes
+        redrawBitmap()
+        forceScreenRefresh()
+
+        // Report erased indices to JS (already sorted descending)
+        onEraseEnd(mapOf(
+            "indices" to erasedIndices,
+        ))
+    }
+
+    /**
+     * Hit-test eraser path against stored strokes.
+     * Uses Notable's proven algorithm:
+     * 1. Build a Path from eraser points
+     * 2. Expand it by 30px using Paint.getFillPath (eraser corridor)
+     * 3. Convert to Region for point-in-path testing
+     * 4. Phase 1: bounding box prefilter
+     * 5. Phase 2: check if any stroke point falls inside the eraser region
+     *
+     * @return indices of erased strokes, sorted descending for safe removal.
+     */
+    private fun findErasedStrokeIndices(eraserPoints: List<FloatArray>): List<Int> {
+        // Build the eraser path
+        val rawPath = Path()
+        rawPath.moveTo(eraserPoints[0][0], eraserPoints[0][1])
+        for (i in 1 until eraserPoints.size) {
+            rawPath.lineTo(eraserPoints[i][0], eraserPoints[i][1])
+        }
+
+        // Expand into a 30px-wide corridor
+        val expandedPath = Path()
+        eraserExpansionPaint.getFillPath(rawPath, expandedPath)
+
+        // Compute eraser bounds for prefiltering
+        val eraserBounds = RectF()
+        expandedPath.computeBounds(eraserBounds, true)
+        if (eraserBounds.isEmpty) return emptyList()
+
+        // Convert to Region for efficient point-in-path testing.
+        // Region uses integer coordinates, so we work in the canvas
+        // coordinate space directly (pixels).
+        val clipRect = Rect(
+            eraserBounds.left.toInt(),
+            eraserBounds.top.toInt(),
+            eraserBounds.right.toInt() + 1,
+            eraserBounds.bottom.toInt() + 1,
+        )
+        val eraserRegion = Region()
+        eraserRegion.setPath(expandedPath, Region(clipRect))
+
+        val result = mutableListOf<Int>()
+        for (i in strokes.indices) {
+            val stroke = strokes[i]
+
+            // Phase 1: bounding box prefilter
+            if (!RectF.intersects(stroke.bounds, eraserBounds)) continue
+
+            // Phase 2: check if any point falls inside the eraser region
+            val hit = stroke.points.any { point ->
+                eraserRegion.contains(point[0].toInt(), point[1].toInt())
+            }
+            if (hit) {
+                result.add(i)
+            }
+        }
+
+        // Sort descending for safe removal / splice
+        result.sortDescending()
+        return result
+    }
+
+    /**
+     * Redraw the entire bitmap from scratch: background + all retained strokes.
+     * Used after eraser removes strokes.
+     */
+    private fun redrawBitmap() {
+        val canvas = bitmapCanvas ?: return
+        val bmp = bitmap ?: return
+        drawBackground(canvas, bmp.width, bmp.height)
+
+        val paint = Paint().apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            isAntiAlias = true
+        }
+
+        for (stroke in strokes) {
+            paint.color = stroke.color
+            paint.strokeWidth = stroke.width
+            renderPointsToBitmap(stroke.points, paint)
+        }
+    }
+
+    // ── Helpers ─────────────────────────────────────────────────────
+
+    /** Compute the bounding box of a list of [x, y, pressure] points. */
+    private fun computeBounds(points: List<FloatArray>): RectF {
+        if (points.isEmpty()) return RectF()
+        var minX = Float.MAX_VALUE
+        var minY = Float.MAX_VALUE
+        var maxX = Float.MIN_VALUE
+        var maxY = Float.MIN_VALUE
+        for (p in points) {
+            minX = min(minX, p[0])
+            minY = min(minY, p[1])
+            maxX = max(maxX, p[0])
+            maxY = max(maxY, p[1])
+        }
+        return RectF(minX, minY, maxX, maxY)
     }
 
     /**
@@ -254,6 +502,21 @@ class DrawingCanvasView(
     // ── Public API ─────────────────────────────────────────────────
 
     /**
+     * Set the background pattern. Called by the Expo Modules prop setter.
+     * Supported values: "blank" (plain white), "dotted" (dot grid).
+     */
+    fun setBackgroundPattern(pattern: String) {
+        if (backgroundPattern == pattern) return
+        backgroundPattern = pattern
+
+        // Redraw if bitmap already exists (prop change after surface created)
+        if (bitmapCanvas != null) {
+            redrawBitmap()
+            forceScreenRefresh()
+        }
+    }
+
+    /**
      * Load strokes from serialized data and render them to the bitmap.
      * Used for the resume flow: load SVG → parse data-points → loadStrokes.
      *
@@ -264,9 +527,13 @@ class DrawingCanvasView(
      *
      * Clears the canvas first, then renders all strokes, then refreshes the screen.
      */
-    fun loadStrokes(strokes: List<Map<String, Any>>) {
+    fun loadStrokes(strokeMaps: List<Map<String, Any>>) {
         val canvas = bitmapCanvas ?: return
-        canvas.drawColor(Color.WHITE)
+        val bmp = bitmap ?: return
+        drawBackground(canvas, bmp.width, bmp.height)
+
+        // Clear and rebuild the retained stroke list
+        strokes.clear()
 
         val paint = Paint().apply {
             style = Paint.Style.STROKE
@@ -275,24 +542,35 @@ class DrawingCanvasView(
             isAntiAlias = true
         }
 
-        for (stroke in strokes) {
-            val pointsStr = stroke["points"] as? String ?: continue
-            val colorStr = stroke["color"] as? String ?: "#000000"
-            val widthVal = stroke["width"]
+        for (strokeMap in strokeMaps) {
+            val pointsStr = strokeMap["points"] as? String ?: continue
+            val colorStr = strokeMap["color"] as? String ?: "#000000"
+            val widthVal = strokeMap["width"]
 
-            paint.color = try {
+            val parsedColor = try {
                 Color.parseColor(colorStr)
             } catch (_: Throwable) {
                 Color.BLACK
             }
-            paint.strokeWidth = when (widthVal) {
+            val parsedWidth = when (widthVal) {
                 is Number -> widthVal.toFloat()
                 else -> 3f
             }
 
+            paint.color = parsedColor
+            paint.strokeWidth = parsedWidth
+
             val points = deserializePoints(pointsStr)
             if (points.isNotEmpty()) {
                 renderPointsToBitmap(points, paint)
+
+                // Retain for eraser hit-testing
+                strokes.add(StrokeData(
+                    points = points,
+                    color = parsedColor,
+                    width = parsedWidth,
+                    bounds = computeBounds(points),
+                ))
             }
         }
 
@@ -301,14 +579,19 @@ class DrawingCanvasView(
     }
 
     fun clear() {
-        bitmapCanvas?.drawColor(Color.WHITE)
+        val canvas = bitmapCanvas ?: return
+        val bmp = bitmap ?: return
+        drawBackground(canvas, bmp.width, bmp.height)
         strokeCount = 0
+        strokes.clear()
         currentStrokePoints.clear()
+        currentEraserPoints.clear()
         forceScreenRefresh()
     }
 
     fun cleanup() {
         closeTouchHelper()
+        strokes.clear()
         bitmap?.recycle()
         bitmap = null
         bitmapCanvas = null
