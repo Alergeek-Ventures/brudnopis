@@ -8,6 +8,7 @@ node_modules/
 dist/
 web-build/
 expo-env.d.ts
+src/types/uniwind-types.d.ts
 
 # Native
 .kotlin/
@@ -36,11 +37,9 @@ yarn-error.*
 # typescript
 *.tsbuildinfo
 
-app-example
-
 # generated native folders
 /ios
 /android
 
 # Expo module build artifacts
-modules/**/android/build/
+src/features/onyx-sdk/modules/**/android/build/

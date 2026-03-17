@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "scripts": {
     "start": "expo start",
+    "prebuild": "npx expo prebuild --clean -p android",
     "android": "expo run:android",
     "lint": "biome check .",
     "lint:fix": "biome check --fix .",
@@ -11,9 +12,13 @@
     "test": "vitest"
   },
   "dependencies": {
+    "@react-native-async-storage/async-storage": "2.2.0",
     "@react-navigation/bottom-tabs": "^7.4.0",
+    "@tanstack/react-query": "^5.90.21",
+    "date-fns": "^4.1.0",
     "expo": "^55.0.0",
     "expo-constants": "~55.0.7",
+    "expo-file-system": "~55.0.10",
     "expo-font": "~55.0.4",
     "expo-linking": "~55.0.7",
     "expo-router": "~55.0.5",
@@ -40,5 +45,11 @@
       "react-dom": "19.2.0"
     }
   },
+  "expo": {
+    "autolinking": {
+      "nativeModulesDir": "./src/features/onyx-sdk/modules"
+    }
+  },
+  "packageManager": "pnpm@10.32.1",
   "private": true
 }

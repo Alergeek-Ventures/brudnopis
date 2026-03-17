@@ -3,9 +3,9 @@
   "compilerOptions": {
     "strict": true,
     "paths": {
-      "@/*": ["./*"],
-      "drawing-canvas": ["./modules/drawing-canvas"]
+      "@/*": ["./src/*"],
+      "drawing-canvas": ["./src/features/onyx-sdk/modules/drawing-canvas"]
     }
   },
-  "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"]
+  "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts", "src/types/**/*.d.ts"]
 }
