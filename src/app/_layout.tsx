@@ -37,17 +37,11 @@ export default function RootLayout() {
         <HydrateAtoms>
           <SafeAreaProvider>
             <SafeAreaListener onChange={({ insets }) => Uniwind.updateInsets(insets)}>
-              <Stack>
-                <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-                <Stack.Screen
-                  name="canvas"
-                  options={{
-                    headerShown: false,
-                    gestureEnabled: false,
-                  }}
-                />
-                <Stack.Screen name="folder-picker" options={{ headerShown: false }} />
-                <Stack.Screen name="settings" options={{ headerShown: false }} />
+              <Stack screenOptions={{ headerShown: false, animation: 'none' }}>
+                <Stack.Screen name="index" />
+                <Stack.Screen name="canvas" options={{ gestureEnabled: false }} />
+                <Stack.Screen name="folder-picker" />
+                <Stack.Screen name="settings" />
               </Stack>
               <StatusBar style="light" />
             </SafeAreaListener>

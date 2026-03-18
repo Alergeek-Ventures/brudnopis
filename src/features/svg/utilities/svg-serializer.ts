@@ -13,7 +13,7 @@ const DOT_COLOR = '#C0C0C0';
  * Uses polyline (M/L) for now — can be upgraded to cubic bezier later.
  * Since data-points is the source of truth, this is a rendering-only concern.
  */
-function pointsToPathD(stroke: Stroke): string {
+export function pointsToPathD(stroke: Stroke): string {
   const { points } = stroke;
   if (points.length === 0) return '';
   if (points.length === 1) {

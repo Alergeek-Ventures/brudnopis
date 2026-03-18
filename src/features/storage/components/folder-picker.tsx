@@ -24,14 +24,14 @@ export function FolderPicker() {
           Documents are saved as SVG files.
         </Text>
         {pickMutation.isError && (
-          <Text className="text-center text-sm text-red-600">
+          <Text className="text-center text-sm text-red-700">
             Failed to pick folder. Please try again.
           </Text>
         )}
         <Pressable
           onPress={() => pickMutation.mutate()}
           disabled={pickMutation.isPending}
-          className="rounded-lg bg-sky-700 px-8 py-4 active:bg-sky-800 disabled:opacity-50"
+          className="rounded-lg bg-sky-700 px-8 py-4 active:bg-sky-900 disabled:opacity-50"
         >
           <Text className="text-center text-base font-semibold text-white">
             {pickMutation.isPending ? 'Opening...' : 'Select Folder'}

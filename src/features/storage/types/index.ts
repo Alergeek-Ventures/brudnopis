@@ -8,4 +8,6 @@ export type DocumentInfo = {
   createdAt: Date | null;
   /** Recognized text from SVG <metadata>, if available. */
   recognizedText?: string;
+  /** Raw SVG content for thumbnail rendering. */
+  svgContent?: string;
 };

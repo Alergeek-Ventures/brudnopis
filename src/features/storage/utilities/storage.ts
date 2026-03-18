@@ -77,9 +77,11 @@ export async function listDocuments(folderUri: string): Promise<DocumentInfo[]> 
   const docs = await Promise.all(
     svgEntries.map(async ({ uri, filename }) => {
       let recognizedText: string | undefined;
+      let svgContent: string | undefined;
       try {
         const svg = await readAsStringAsync(ensureSafUriEncoded(uri));
         recognizedText = extractMetadataText(svg);
+        svgContent = svg;
       } catch {
         // File read failed — skip metadata extraction
       }
@@ -89,6 +91,7 @@ export async function listDocuments(folderUri: string): Promise<DocumentInfo[]> 
         filename,
         createdAt: parseFilenameToDate(filename),
         recognizedText,
+        svgContent,
       };
     }),
   );

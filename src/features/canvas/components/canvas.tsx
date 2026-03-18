@@ -81,7 +81,7 @@ function CanvasContent({ fileUri }: { fileUri: string }) {
       <View className="absolute right-4 top-4 z-10">
         <Pressable
           onPress={handleClose}
-          className="rounded-lg bg-gray-800/80 px-4 py-2.5 active:bg-gray-900"
+          className="rounded-lg bg-black px-4 py-2.5 active:bg-gray-900"
         >
           <Text className="text-sm font-semibold text-white">Close</Text>
         </Pressable>

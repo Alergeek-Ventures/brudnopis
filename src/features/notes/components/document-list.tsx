@@ -1,10 +1,11 @@
+import { LegendList } from '@legendapp/list/react-native';
+import { MaterialIcons } from '@react-native-vector-icons/material-icons';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { router } from 'expo-router';
-import { useAtom } from 'jotai';
-import { FlatList, Pressable, Text, View } from 'react-native';
+import { useMemo } from 'react';
+import { Pressable, Text, View } from 'react-native';
+import { Path, Svg } from 'react-native-svg';
 
-import { noteLifecycleMachineAtom } from '@/features/recognition/atoms';
-import type { RecognitionResult } from '@/features/recognition/machine';
 import type { DocumentInfo } from '@/features/storage/types';
 import { formatDisplayName } from '@/features/storage/utilities/naming';
 import {
@@ -12,8 +13,9 @@ import {
   createDocument,
   getSavedFolderUri,
   listDocuments,
-  pickFolder,
 } from '@/features/storage/utilities/storage';
+import { parseSvgDocument } from '@/features/svg/utilities/svg-parser';
+import { pointsToPathD } from '@/features/svg/utilities/svg-serializer';
 
 function useDocumentList() {
   const folderQuery = useQuery({
@@ -54,138 +56,108 @@ function useDocumentList() {
     createMutation.mutate(folderUri);
   };
 
-  const changeFolderMutation = useMutation({
-    mutationFn: () => pickFolder(folderUri ?? undefined),
-  });
-
   return {
     documents: documentsQuery.data ?? [],
     isLoading: folderQuery.isLoading || documentsQuery.isLoading,
     isCreating: createMutation.isPending,
-    isChangingFolder: changeFolderMutation.isPending,
     handleNewDocument,
-    handleChangeFolder: () => changeFolderMutation.mutate(),
   };
 }
 
-function RecognitionStatus({
-  result,
-  recognizedText,
-  filename,
-}: {
-  result: RecognitionResult | undefined;
-  recognizedText: string | undefined;
-  filename: string;
-}) {
-  // Priority: live machine result > persisted SVG metadata > filename fallback
+/** Canvas dimensions — must match DrawingCanvasView. */
+const CANVAS_WIDTH = 1872;
+const CANVAS_HEIGHT = 2404;
+const THUMBNAIL_ASPECT_RATIO = CANVAS_WIDTH / CANVAS_HEIGHT;
 
-  if (result) {
-    if (result.status === 'done' && result.text) {
-      return (
-        <Text className="text-sm text-gray-600" numberOfLines={2}>
-          {result.text}
-        </Text>
-      );
-    }
-    if (result.status === 'error') {
-      return <Text className="text-sm text-red-500">Recognition failed</Text>;
-    }
-  }
+function NoteThumbnail({ svgContent }: { svgContent: string }) {
+  const strokes = useMemo(() => parseSvgDocument(svgContent).strokes, [svgContent]);
 
-  // No live result — show persisted text from SVG metadata
-  if (recognizedText) {
+  if (strokes.length === 0) {
     return (
-      <Text className="text-sm text-gray-600" numberOfLines={2}>
-        {recognizedText}
-      </Text>
+      <View className="flex-1 items-center justify-center bg-gray-100">
+        <Text className="text-sm text-gray-600">Empty</Text>
+      </View>
     );
   }
 
-  // No text at all — show filename
-  return <Text className="text-sm text-gray-500">{filename}</Text>;
+  return (
+    <Svg viewBox={`0 0 ${CANVAS_WIDTH} ${CANVAS_HEIGHT}`} width="100%" height="100%">
+      {strokes.map((stroke, i) => (
+        <Path
+          // biome-ignore lint/suspicious/noArrayIndexKey: static array from parsed SVG, never reordered
+          key={i}
+          d={pointsToPathD(stroke)}
+          stroke={stroke.color}
+          strokeWidth={stroke.width}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          fill="none"
+        />
+      ))}
+    </Svg>
+  );
+}
+
+function NoteCard({ item, onPress }: { item: DocumentInfo; onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} className="flex-1">
+      <View className="overflow-hidden rounded-lg border border-gray-300 bg-white">
+        <View style={{ aspectRatio: THUMBNAIL_ASPECT_RATIO }}>
+          {item.svgContent ? (
+            <NoteThumbnail svgContent={item.svgContent} />
+          ) : (
+            <View className="flex-1 items-center justify-center bg-gray-100">
+              <Text className="text-sm text-gray-600">Empty</Text>
+            </View>
+          )}
+        </View>
+      </View>
+      <View className="px-0.5 pt-1 pb-0.5">
+        <Text className="text-xs text-gray-600" numberOfLines={1}>
+          {item.createdAt ? formatDisplayName(item.createdAt) : item.filename}
+        </Text>
+      </View>
+    </Pressable>
+  );
 }
 
 export function DocumentList() {
-  const {
-    documents,
-    isLoading,
-    isCreating,
-    isChangingFolder,
-    handleNewDocument,
-    handleChangeFolder,
-  } = useDocumentList();
-
-  const [snapshot] = useAtom(noteLifecycleMachineAtom);
-
-  // Show recognition pipeline status
-  const isRecognizing = snapshot.matches('recognizing');
-  const recognizingFileUri = isRecognizing ? snapshot.context.current?.fileUri : null;
+  const { documents, isLoading, isCreating, handleNewDocument } = useDocumentList();
 
   const handleOpenDocument = (doc: DocumentInfo) => {
     router.push({ pathname: '/canvas', params: { fileUri: doc.uri } });
   };
 
   const renderItem = ({ item }: { item: DocumentInfo }) => {
-    const decodedItemUri = decodeURIComponent(item.uri);
-
-    // Check if this document is currently being recognized
-    const isCurrentlyRecognizing =
-      recognizingFileUri && decodeURIComponent(recognizingFileUri) === decodedItemUri;
-
-    // Check for completed recognition results
-    const result = snapshot.context.results.get(decodedItemUri);
-
-    return (
-      <Pressable
-        onPress={() => handleOpenDocument(item)}
-        className="border-b border-gray-200 px-6 py-5"
-      >
-        <View className="gap-1">
-          <Text className="text-base text-gray-900">
-            {item.createdAt ? formatDisplayName(item.createdAt) : item.filename}
-          </Text>
-          {isCurrentlyRecognizing ? (
-            <Text className="text-sm text-sky-600">Recognizing...</Text>
-          ) : (
-            <RecognitionStatus
-              result={result}
-              recognizedText={item.recognizedText}
-              filename={item.filename}
-            />
-          )}
-        </View>
-      </Pressable>
-    );
+    return <NoteCard item={item} onPress={() => handleOpenDocument(item)} />;
   };
 
   if (isLoading) {
     return (
       <View className="flex-1 items-center justify-center pt-safe px-safe">
-        <Text className="text-base text-gray-500">Loading...</Text>
+        <Text className="text-base text-gray-600">Loading...</Text>
       </View>
     );
   }
 
   return (
-    <View className="flex-1 pt-safe px-safe">
-      <View className="border-b border-gray-200 px-6 pb-4 pt-2">
+    <View className="flex-1 p-safe">
+      <View className="border-b border-gray-300 px-6 pb-4 pt-4">
         <View className="flex-row items-center justify-between">
-          <Text className="text-2xl font-bold text-gray-900">Notes</Text>
+          <Text className="text-2xl font-bold text-black">Notes</Text>
           <View className="flex-row items-center gap-3">
             <Pressable
               onPress={() => router.push('/settings')}
-              className="rounded-lg bg-gray-200 px-3 py-2.5 active:bg-gray-300"
+              className="rounded-lg bg-gray-200 p-2.5 active:bg-gray-300"
             >
-              <Text className="text-sm text-gray-700">Settings</Text>
+              <MaterialIcons name="settings" size={20} color="black" />
             </Pressable>
             <Pressable
               onPress={handleNewDocument}
               disabled={isCreating}
-              className="rounded-lg bg-sky-700 px-5 py-2.5 active:bg-sky-800 disabled:opacity-50"
+              className="rounded-lg bg-sky-700 p-2.5 active:bg-sky-900 disabled:opacity-50"
             >
-              <Text className="text-sm font-semibold text-white">
-                {isCreating ? 'Creating...' : 'New Note'}
-              </Text>
+              <MaterialIcons name="add" size={22} color="white" />
             </Pressable>
           </View>
         </View>
@@ -193,21 +165,22 @@ export function DocumentList() {
 
       {documents.length === 0 ? (
         <View className="flex-1 items-center justify-center px-8">
-          <Text className="mb-6 text-center text-base leading-6 text-gray-500">
+          <Text className="mb-6 text-center text-base leading-6 text-gray-600">
             No notes yet.{'\n'}Tap "New Note" to get started.
           </Text>
         </View>
       ) : (
-        <FlatList data={documents} keyExtractor={(item) => item.uri} renderItem={renderItem} />
+        <LegendList
+          data={documents}
+          keyExtractor={(item) => item.uri}
+          renderItem={renderItem}
+          recycleItems
+          numColumns={4}
+          columnWrapperStyle={{ gap: 8 }}
+          contentContainerStyle={{ padding: 12 }}
+          estimatedItemSize={200}
+        />
       )}
-
-      <View className="border-t border-gray-200 px-6 py-3">
-        <Pressable onPress={handleChangeFolder} disabled={isChangingFolder}>
-          <Text className="text-center text-sm text-gray-500">
-            {isChangingFolder ? 'Changing...' : 'Change Folder'}
-          </Text>
-        </Pressable>
-      </View>
     </View>
   );
 }
