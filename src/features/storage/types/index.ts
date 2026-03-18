@@ -6,4 +6,6 @@ export type DocumentInfo = {
   filename: string;
   /** Parsed creation date, or null if filename doesn't match pattern. */
   createdAt: Date | null;
+  /** Recognized text from SVG <metadata>, if available. */
+  recognizedText?: string;
 };

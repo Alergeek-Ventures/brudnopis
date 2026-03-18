@@ -4,7 +4,8 @@
     "strict": true,
     "paths": {
       "@/*": ["./src/*"],
-      "drawing-canvas": ["./src/features/onyx-sdk/modules/drawing-canvas"]
+      "drawing-canvas": ["./src/native-modules/drawing-canvas"],
+      "ink-recognition": ["./src/native-modules/ink-recognition"]
     }
   },
   "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts", "src/types/**/*.d.ts"]

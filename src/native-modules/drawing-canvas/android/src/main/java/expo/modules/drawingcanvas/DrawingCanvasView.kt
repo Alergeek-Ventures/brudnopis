@@ -55,11 +55,11 @@ class DrawingCanvasView(
     private var strokeCount: Int = 0
 
     // Accumulates points for the current stroke across multiple batches.
-    // Each FloatArray is [x, y, pressure]. Cleared on stroke end.
+    // Each FloatArray is [x, y, pressure, timestamp]. Cleared on stroke end.
     private val currentStrokePoints = mutableListOf<FloatArray>()
 
     // Accumulates eraser path points across multiple batches.
-    // Each FloatArray is [x, y, pressure]. Cleared on erase end.
+    // Each FloatArray is [x, y, pressure, timestamp]. Cleared on erase end.
     private val currentEraserPoints = mutableListOf<FloatArray>()
 
     // Retained strokes for eraser hit-testing and bitmap redraw.
@@ -431,14 +431,14 @@ class DrawingCanvasView(
     }
 
     /**
-     * Serialize a list of [x, y, pressure] points to a packed string.
-     * Format: "x,y,p;x,y,p;..." — integers for x/y, 2 decimal places for pressure.
+     * Serialize a list of [x, y, pressure, timestamp] points to a packed string.
+     * Format: "x,y,p,t;x,y,p,t;..." — integers for x/y/t, 2 decimal places for pressure.
      *
      * The same format is implemented in TypeScript for the JS side:
      * @see features/notes/points.ts — encodePoints/decodePoints
      */
     private fun serializePoints(points: List<FloatArray>): String {
-        val sb = StringBuilder(points.size * 12) // rough capacity estimate
+        val sb = StringBuilder(points.size * 16) // rough capacity estimate
         for (i in points.indices) {
             if (i > 0) sb.append(';')
             val p = points[i]
@@ -447,6 +447,8 @@ class DrawingCanvasView(
             sb.append(p[1].toInt())  // y
             sb.append(',')
             sb.append(String.format("%.2f", p[2]))  // pressure
+            sb.append(',')
+            sb.append(p[3].toLong())  // timestamp
         }
         return sb.toString()
     }
@@ -483,18 +485,19 @@ class DrawingCanvasView(
     }
 
     /**
-     * Deserialize a packed point string back to a list of [x, y, pressure].
+     * Deserialize a packed point string back to a list of [x, y, pressure, timestamp].
      * Inverse of serializePoints. Returns empty list for empty/invalid input.
      */
     private fun deserializePoints(packed: String): List<FloatArray> {
         if (packed.isEmpty()) return emptyList()
         return packed.split(';').mapNotNull { segment ->
             val parts = segment.split(',')
-            if (parts.size < 3) null
+            if (parts.size < 4) null
             else floatArrayOf(
                 parts[0].toFloat(),
                 parts[1].toFloat(),
-                parts[2].toFloat()
+                parts[2].toFloat(),
+                parts[3].toFloat()
             )
         }
     }

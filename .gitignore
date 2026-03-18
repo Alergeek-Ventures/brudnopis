@@ -42,4 +42,4 @@ yarn-error.*
 /android
 
 # Expo module build artifacts
-src/features/onyx-sdk/modules/**/android/build/
+src/native-modules/**/android/build/

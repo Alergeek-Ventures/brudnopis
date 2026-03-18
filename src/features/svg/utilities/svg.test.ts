@@ -6,17 +6,17 @@ import { serializeSvgDocument } from './svg-serializer';
 const sampleStrokes: Stroke[] = [
   {
     points: [
-      { x: 100, y: 200, pressure: 0.45 },
-      { x: 102, y: 203, pressure: 0.52 },
-      { x: 105, y: 210, pressure: 0.61 },
+      { x: 100, y: 200, pressure: 0.45, t: 1000 },
+      { x: 102, y: 203, pressure: 0.52, t: 1010 },
+      { x: 105, y: 210, pressure: 0.61, t: 1020 },
     ],
     color: '#000000',
     width: 3,
   },
   {
     points: [
-      { x: 500, y: 600, pressure: 0.8 },
-      { x: 510, y: 610, pressure: 0.75 },
+      { x: 500, y: 600, pressure: 0.8, t: 2000 },
+      { x: 510, y: 610, pressure: 0.75, t: 2010 },
     ],
     color: '#FF0000',
     width: 5,
@@ -38,10 +38,10 @@ describe('serializeSvgDocument', () => {
     expect(svg).toContain('d="M100,200L102,203L105,210"');
   });
 
-  it('includes data-points attribute on each path', () => {
+  it('includes data-points attribute with timestamps on each path', () => {
     const svg = serializeSvgDocument(sampleStrokes, 1872, 2404);
-    expect(svg).toContain('data-points="100,200,0.45;102,203,0.52;105,210,0.61"');
-    expect(svg).toContain('data-points="500,600,0.80;510,610,0.75"');
+    expect(svg).toContain('data-points="100,200,0.45,1000;102,203,0.52,1010;105,210,0.61,1020"');
+    expect(svg).toContain('data-points="500,600,0.80,2000;510,610,0.75,2010"');
   });
 
   it('includes stroke color and width', () => {
@@ -56,7 +56,7 @@ describe('serializeSvgDocument', () => {
     const strokes: Stroke[] = [
       { points: [], color: '#000000', width: 3 },
       {
-        points: [{ x: 10, y: 20, pressure: 0.5 }],
+        points: [{ x: 10, y: 20, pressure: 0.5, t: 100 }],
         color: '#000000',
         width: 3,
       },
@@ -70,7 +70,7 @@ describe('serializeSvgDocument', () => {
   it('handles single-point stroke', () => {
     const strokes: Stroke[] = [
       {
-        points: [{ x: 50, y: 60, pressure: 0.5 }],
+        points: [{ x: 50, y: 60, pressure: 0.5, t: 100 }],
         color: '#000000',
         width: 3,
       },
@@ -145,7 +145,7 @@ describe('parseSvgDocument', () => {
 
   it('defaults color to #000000 and width to 3 when missing', () => {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-      <path d="M0,0L10,10" data-points="0,0,0.50;10,10,0.50"/>
+      <path d="M0,0L10,10" data-points="0,0,0.50,100;10,10,0.50,110"/>
     </svg>`;
     const { strokes } = parseSvgDocument(svg);
     expect(strokes).toHaveLength(1);
@@ -174,7 +174,7 @@ describe('parseSvgDocument', () => {
 });
 
 describe('round-trip', () => {
-  it('serialize → parse preserves all stroke data', () => {
+  it('serialize -> parse preserves all stroke data', () => {
     const svg = serializeSvgDocument(sampleStrokes, 1872, 2404);
     const { strokes } = parseSvgDocument(svg);
     expect(strokes).toEqual(sampleStrokes);
@@ -186,6 +186,7 @@ describe('round-trip', () => {
         x: i * 10 + j,
         y: i * 10 + j * 2,
         pressure: Math.round(Math.random() * 100) / 100,
+        t: 1000 + i * 100 + j,
       })),
       color: '#000000',
       width: 3,

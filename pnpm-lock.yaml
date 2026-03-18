@@ -11,6 +11,9 @@ importers:
 
   .:
     dependencies:
+      '@epic-web/invariant':
+        specifier: ^1.0.0
+        version: 1.0.0
       '@react-native-async-storage/async-storage':
         specifier: 2.2.0
         version: 2.2.0(react-native@0.83.2(@babel/core@7.29.0)(@types/react@19.2.14)(react@19.2.0))
@@ -50,6 +53,15 @@ importers:
       expo-system-ui:
         specifier: ~55.0.9
         version: 55.0.10(expo@55.0.7)(react-native@0.83.2(@babel/core@7.29.0)(@types/react@19.2.14)(react@19.2.0))
+      jotai:
+        specifier: ^2.18.1
+        version: 2.18.1(@babel/core@7.29.0)(@babel/template@7.28.6)(@types/react@19.2.14)(react@19.2.0)
+      jotai-tanstack-query:
+        specifier: ^0.11.0
+        version: 0.11.0(@tanstack/query-core@5.90.20)(@tanstack/react-query@5.90.21(react@19.2.0))(jotai@2.18.1(@babel/core@7.29.0)(@babel/template@7.28.6)(@types/react@19.2.14)(react@19.2.0))(react@19.2.0)
+      jotai-xstate:
+        specifier: ^0.6.1
+        version: 0.6.1(jotai@2.18.1(@babel/core@7.29.0)(@babel/template@7.28.6)(@types/react@19.2.14)(react@19.2.0))(xstate@5.28.0)
       react:
         specifier: 19.2.0
         version: 19.2.0
@@ -74,6 +86,9 @@ importers:
       uniwind:
         specifier: ^1.5.0
         version: 1.5.0(react-native@0.83.2(@babel/core@7.29.0)(@types/react@19.2.14)(react@19.2.0))(react@19.2.0)(tailwindcss@4.2.1)
+      xstate:
+        specifier: ^5.28.0
+        version: 5.28.0
     devDependencies:
       '@biomejs/biome':
         specifier: 2.4.7
@@ -685,6 +700,9 @@ packages:
 
   '@emnapi/wasi-threads@1.2.0':
     resolution: {integrity: sha512-N10dEJNSsUx41Z6pZsXU8FjPjpBEplgH24sfkmITrBED1/U2Esum9F3lfLrMjKHHjmi557zQn7kR9R+XWXu5Rg==}
+
+  '@epic-web/invariant@1.0.0':
+    resolution: {integrity: sha512-lrTPqgvfFQtR/eY/qkIzp98OGdNJu0m5ji3q/nJI8v3SXkRKEnWiOxMmbvcSoAIzv/cGiuvRy57k4suKQSAdwA==}
 
   '@expo-google-fonts/material-symbols@0.4.27':
     resolution: {integrity: sha512-cnb3DZnWUWpezGFkJ8y4MT5f/lw6FcgDzeJzic+T+vpQHLHG1cg3SC3i1w1i8Bk4xKR4HPY3t9iIRNvtr5ml8A==}
@@ -2407,6 +2425,43 @@ packages:
     resolution: {integrity: sha512-ekilCSN1jwRvIbgeg/57YFh8qQDNbwDb9xT/qu2DAHbFFZUicIl4ygVaAvzveMhMVr3LnpSKTNnwt8PoOfmKhQ==}
     hasBin: true
 
+  jotai-tanstack-query@0.11.0:
+    resolution: {integrity: sha512-Ys0u0IuuS6/okUJOulFTdCVfVaeKbm1+lKVSN9zHhIxtrAXl9FM4yu7fNvxM6fSz/NCE9tZOKR0MQ3hvplaH8A==}
+    peerDependencies:
+      '@tanstack/query-core': '*'
+      '@tanstack/react-query': '*'
+      jotai: '>=2.0.0'
+      react: ^18.0.0 || ^19.0.0
+    peerDependenciesMeta:
+      '@tanstack/react-query':
+        optional: true
+      react:
+        optional: true
+
+  jotai-xstate@0.6.1:
+    resolution: {integrity: sha512-graSDsorui1a4Zt4jCJ40GuOzOkfOY317XcazYnNx0EHS+D/rOr4aLzZRy0NLaPQZsypfcGSMbNCwksfhwkixA==}
+    peerDependencies:
+      jotai: '>=2.0.0'
+      xstate: '>=5.0.0'
+
+  jotai@2.18.1:
+    resolution: {integrity: sha512-e0NOzK+yRFwHo7DOp0DS0Ycq74KMEAObDWFGmfEL28PD9nLqBTt3/Ug7jf9ca72x0gC9LQZG9zH+0ISICmy3iA==}
+    engines: {node: '>=12.20.0'}
+    peerDependencies:
+      '@babel/core': '>=7.0.0'
+      '@babel/template': '>=7.0.0'
+      '@types/react': '>=17.0.0'
+      react: '>=17.0.0'
+    peerDependenciesMeta:
+      '@babel/core':
+        optional: true
+      '@babel/template':
+        optional: true
+      '@types/react':
+        optional: true
+      react:
+        optional: true
+
   js-tokens@4.0.0:
     resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
 
@@ -3717,6 +3772,9 @@ packages:
     resolution: {integrity: sha512-yMqGBqtXyeN1e3TGYvgNgDVZ3j84W4cwkOXQswghol6APgZWaff9lnbvN7MHYJOiXsvGPXtjTYJEiC9J2wv9Eg==}
     engines: {node: '>=8.0'}
 
+  xstate@5.28.0:
+    resolution: {integrity: sha512-Iaqq6ZrUzqeUtA3hC5LQKZfR8ZLzEFTImMHJM3jWEdVvXWdKvvVLXZEiNQWm3SCA9ZbEou/n5rcsna1wb9t28A==}
+
   y18n@5.0.8:
     resolution: {integrity: sha512-0pfFzegeDWJHJIAmTLRP2DwHjdF5s7jo9tuztdQxAhINCdvS+3nGINqPd00AphqJR/0LhANUS6/+7SCb98YOfA==}
     engines: {node: '>=10'}
@@ -4439,6 +4497,8 @@ snapshots:
     dependencies:
       tslib: 2.8.1
     optional: true
+
+  '@epic-web/invariant@1.0.0': {}
 
   '@expo-google-fonts/material-symbols@0.4.27': {}
 
@@ -6422,6 +6482,26 @@ snapshots:
 
   jiti@2.6.1: {}
 
+  jotai-tanstack-query@0.11.0(@tanstack/query-core@5.90.20)(@tanstack/react-query@5.90.21(react@19.2.0))(jotai@2.18.1(@babel/core@7.29.0)(@babel/template@7.28.6)(@types/react@19.2.14)(react@19.2.0))(react@19.2.0):
+    dependencies:
+      '@tanstack/query-core': 5.90.20
+      jotai: 2.18.1(@babel/core@7.29.0)(@babel/template@7.28.6)(@types/react@19.2.14)(react@19.2.0)
+    optionalDependencies:
+      '@tanstack/react-query': 5.90.21(react@19.2.0)
+      react: 19.2.0
+
+  jotai-xstate@0.6.1(jotai@2.18.1(@babel/core@7.29.0)(@babel/template@7.28.6)(@types/react@19.2.14)(react@19.2.0))(xstate@5.28.0):
+    dependencies:
+      jotai: 2.18.1(@babel/core@7.29.0)(@babel/template@7.28.6)(@types/react@19.2.14)(react@19.2.0)
+      xstate: 5.28.0
+
+  jotai@2.18.1(@babel/core@7.29.0)(@babel/template@7.28.6)(@types/react@19.2.14)(react@19.2.0):
+    optionalDependencies:
+      '@babel/core': 7.29.0
+      '@babel/template': 7.28.6
+      '@types/react': 19.2.14
+      react: 19.2.0
+
   js-tokens@4.0.0: {}
 
   js-yaml@3.14.2:
@@ -7778,6 +7858,8 @@ snapshots:
   xmlbuilder@11.0.1: {}
 
   xmlbuilder@15.1.1: {}
+
+  xstate@5.28.0: {}
 
   y18n@5.0.8: {}
 

@@ -12,6 +12,7 @@
     "test": "vitest"
   },
   "dependencies": {
+    "@epic-web/invariant": "^1.0.0",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-navigation/bottom-tabs": "^7.4.0",
     "@tanstack/react-query": "^5.90.21",
@@ -25,6 +26,9 @@
     "expo-splash-screen": "~55.0.10",
     "expo-status-bar": "~55.0.4",
     "expo-system-ui": "~55.0.9",
+    "jotai": "^2.18.1",
+    "jotai-tanstack-query": "^0.11.0",
+    "jotai-xstate": "^0.6.1",
     "react": "19.2.0",
     "react-native": "0.83.2",
     "react-native-gesture-handler": "~2.30.0",
@@ -32,7 +36,8 @@
     "react-native-screens": "~4.23.0",
     "react-native-worklets": "0.7.2",
     "tailwindcss": "^4.0.0",
-    "uniwind": "^1.5.0"
+    "uniwind": "^1.5.0",
+    "xstate": "^5.28.0"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.7",
@@ -47,7 +52,7 @@
   },
   "expo": {
     "autolinking": {
-      "nativeModulesDir": "./src/features/onyx-sdk/modules"
+      "nativeModulesDir": "./src/native-modules"
     }
   },
   "packageManager": "pnpm@10.32.1",

@@ -4,6 +4,8 @@ export type Point = {
   y: number;
   /** Pressure value from the digitizer, 0.0–1.0. */
   pressure: number;
+  /** Timestamp in milliseconds from the Onyx SDK TouchPoint. */
+  t: number;
 };
 
 /** A single stroke: a sequence of points with visual properties. */

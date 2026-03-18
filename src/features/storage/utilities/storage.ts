@@ -4,6 +4,9 @@ import {
   StorageAccessFramework,
   writeAsStringAsync,
 } from 'expo-file-system/legacy';
+
+import { extractMetadataText } from '@/features/svg/utilities/metadata';
+
 import type { DocumentInfo } from '../types';
 import { generateFilename, parseFilenameToDate } from './naming';
 
@@ -62,21 +65,33 @@ function extractFilename(uri: string): string {
 /**
  * List all .svg documents in the given folder.
  * Returns DocumentInfo[] sorted reverse-chronological (newest first).
+ * Reads each SVG in parallel to extract recognized text from <metadata>.
  */
 export async function listDocuments(folderUri: string): Promise<DocumentInfo[]> {
   const uris = await StorageAccessFramework.readDirectoryAsync(folderUri);
 
-  const docs: DocumentInfo[] = [];
-  for (const uri of uris) {
-    const filename = extractFilename(uri);
-    if (!filename.endsWith('.svg')) continue;
+  const svgEntries = uris
+    .map((uri) => ({ uri, filename: extractFilename(uri) }))
+    .filter((entry) => entry.filename.endsWith('.svg'));
 
-    docs.push({
-      uri,
-      filename,
-      createdAt: parseFilenameToDate(filename),
-    });
-  }
+  const docs = await Promise.all(
+    svgEntries.map(async ({ uri, filename }) => {
+      let recognizedText: string | undefined;
+      try {
+        const svg = await readAsStringAsync(ensureSafUriEncoded(uri));
+        recognizedText = extractMetadataText(svg);
+      } catch {
+        // File read failed — skip metadata extraction
+      }
+
+      return {
+        uri,
+        filename,
+        createdAt: parseFilenameToDate(filename),
+        recognizedText,
+      };
+    }),
+  );
 
   // Sort reverse-chronological: newest first.
   // Filenames are ISO-ish, so lexicographic reverse = chronological reverse.

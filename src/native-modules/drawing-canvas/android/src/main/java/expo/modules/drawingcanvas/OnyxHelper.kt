@@ -48,7 +48,7 @@ class OnyxHelper(
         override fun onRawDrawingTouchPointListReceived(pointList: TouchPointList?) {
             val points = pointList?.points ?: return
             if (points.isEmpty()) return
-            val data = points.map { floatArrayOf(it.x, it.y, it.pressure.toFloat()) }
+            val data = points.map { floatArrayOf(it.x, it.y, it.pressure.toFloat(), it.timestamp.toFloat()) }
             onStrokeDrawn(data)
         }
 
@@ -78,7 +78,7 @@ class OnyxHelper(
         override fun onRawErasingTouchPointListReceived(pointList: TouchPointList?) {
             val points = pointList?.points ?: return
             if (points.isEmpty()) return
-            val data = points.map { floatArrayOf(it.x, it.y, it.pressure.toFloat()) }
+            val data = points.map { floatArrayOf(it.x, it.y, it.pressure.toFloat(), it.timestamp.toFloat()) }
             onEraserDrawn(data)
         }
     }

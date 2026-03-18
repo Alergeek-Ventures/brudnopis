@@ -1,6 +1,10 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { router } from 'expo-router';
+import { useAtom } from 'jotai';
 import { FlatList, Pressable, Text, View } from 'react-native';
+
+import { noteLifecycleMachineAtom } from '@/features/recognition/atoms';
+import type { RecognitionResult } from '@/features/recognition/machine';
 import type { DocumentInfo } from '@/features/storage/types';
 import { formatDisplayName } from '@/features/storage/utilities/naming';
 import {
@@ -64,6 +68,43 @@ function useDocumentList() {
   };
 }
 
+function RecognitionStatus({
+  result,
+  recognizedText,
+  filename,
+}: {
+  result: RecognitionResult | undefined;
+  recognizedText: string | undefined;
+  filename: string;
+}) {
+  // Priority: live machine result > persisted SVG metadata > filename fallback
+
+  if (result) {
+    if (result.status === 'done' && result.text) {
+      return (
+        <Text className="text-sm text-gray-600" numberOfLines={2}>
+          {result.text}
+        </Text>
+      );
+    }
+    if (result.status === 'error') {
+      return <Text className="text-sm text-red-500">Recognition failed</Text>;
+    }
+  }
+
+  // No live result — show persisted text from SVG metadata
+  if (recognizedText) {
+    return (
+      <Text className="text-sm text-gray-600" numberOfLines={2}>
+        {recognizedText}
+      </Text>
+    );
+  }
+
+  // No text at all — show filename
+  return <Text className="text-sm text-gray-500">{filename}</Text>;
+}
+
 export function DocumentList() {
   const {
     documents,
@@ -74,21 +115,48 @@ export function DocumentList() {
     handleChangeFolder,
   } = useDocumentList();
 
+  const [snapshot] = useAtom(noteLifecycleMachineAtom);
+
+  // Show recognition pipeline status
+  const isRecognizing = snapshot.matches('recognizing');
+  const recognizingFileUri = isRecognizing ? snapshot.context.current?.fileUri : null;
+
   const handleOpenDocument = (doc: DocumentInfo) => {
     router.push({ pathname: '/canvas', params: { fileUri: doc.uri } });
   };
 
-  const renderItem = ({ item }: { item: DocumentInfo }) => (
-    <Pressable
-      onPress={() => handleOpenDocument(item)}
-      className="border-b border-gray-200 px-6 py-5"
-    >
-      <Text className="text-base text-gray-900">
-        {item.createdAt ? formatDisplayName(item.createdAt) : item.filename}
-      </Text>
-      <Text className="mt-1 text-sm text-gray-500">{item.filename}</Text>
-    </Pressable>
-  );
+  const renderItem = ({ item }: { item: DocumentInfo }) => {
+    const decodedItemUri = decodeURIComponent(item.uri);
+
+    // Check if this document is currently being recognized
+    const isCurrentlyRecognizing =
+      recognizingFileUri && decodeURIComponent(recognizingFileUri) === decodedItemUri;
+
+    // Check for completed recognition results
+    const result = snapshot.context.results.get(decodedItemUri);
+
+    return (
+      <Pressable
+        onPress={() => handleOpenDocument(item)}
+        className="border-b border-gray-200 px-6 py-5"
+      >
+        <View className="gap-1">
+          <Text className="text-base text-gray-900">
+            {item.createdAt ? formatDisplayName(item.createdAt) : item.filename}
+          </Text>
+          {isCurrentlyRecognizing ? (
+            <Text className="text-sm text-sky-600">Recognizing...</Text>
+          ) : (
+            <RecognitionStatus
+              result={result}
+              recognizedText={item.recognizedText}
+              filename={item.filename}
+            />
+          )}
+        </View>
+      </Pressable>
+    );
+  };
 
   if (isLoading) {
     return (
@@ -103,15 +171,23 @@ export function DocumentList() {
       <View className="border-b border-gray-200 px-6 pb-4 pt-2">
         <View className="flex-row items-center justify-between">
           <Text className="text-2xl font-bold text-gray-900">Notes</Text>
-          <Pressable
-            onPress={handleNewDocument}
-            disabled={isCreating}
-            className="rounded-lg bg-sky-700 px-5 py-2.5 active:bg-sky-800 disabled:opacity-50"
-          >
-            <Text className="text-sm font-semibold text-white">
-              {isCreating ? 'Creating...' : 'New Note'}
-            </Text>
-          </Pressable>
+          <View className="flex-row items-center gap-3">
+            <Pressable
+              onPress={() => router.push('/settings')}
+              className="rounded-lg bg-gray-200 px-3 py-2.5 active:bg-gray-300"
+            >
+              <Text className="text-sm text-gray-700">Settings</Text>
+            </Pressable>
+            <Pressable
+              onPress={handleNewDocument}
+              disabled={isCreating}
+              className="rounded-lg bg-sky-700 px-5 py-2.5 active:bg-sky-800 disabled:opacity-50"
+            >
+              <Text className="text-sm font-semibold text-white">
+                {isCreating ? 'Creating...' : 'New Note'}
+              </Text>
+            </Pressable>
+          </View>
         </View>
       </View>
 

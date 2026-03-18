@@ -29,7 +29,7 @@
         }
       ],
       "expo-font",
-      "./src/features/onyx-sdk/plugins/with-boox-sdk"
+      "./src/features/canvas/plugins/with-boox-sdk"
     ],
     "experiments": {
       "typedRoutes": true,
