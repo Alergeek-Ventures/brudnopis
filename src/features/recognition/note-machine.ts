@@ -1,8 +1,9 @@
 import type { DrawingCanvasRef, NativeStrokeData } from 'drawing-canvas';
+import { refreshScreen } from 'drawing-canvas';
 import type { MutableRefObject } from 'react';
-import { type ActorRefFrom, fromPromise, setup } from 'xstate';
-import { loadDocument, saveDocument } from '@/features/storage/utilities/storage';
-import type { BackgroundPattern, Stroke } from '@/features/svg/types';
+import { type ActorRefFrom, assign, fromPromise, setup } from 'xstate';
+import { createDocument, loadDocument, saveDocument } from '@/features/storage/utilities/storage';
+import type { BackgroundPattern, Stroke, StrokeStyle } from '@/features/svg/types';
 import { decodePoints, encodePoints } from '@/features/svg/utilities/points';
 import { parseSvgDocument } from '@/features/svg/utilities/svg-parser';
 import { serializeSvgDocument } from '@/features/svg/utilities/svg-serializer';
@@ -14,7 +15,10 @@ const SAVE_DEBOUNCE_MS = 1000;
 // ── Types ──────────────────────────────────────────────────────
 
 export type NoteMachineInput = {
-  fileUri: string;
+  /** SAF URI of an existing document, or null for a brand-new note. */
+  fileUri: string | null;
+  /** SAF URI of the folder to create a new file in (required when fileUri is null). */
+  folderUri: string | null;
   lang: string;
   width: number;
   height: number;
@@ -24,51 +28,130 @@ export type NoteMachineInput = {
 };
 
 type NoteMachineContext = {
-  fileUri: string;
+  /** SAF URI of the document. Null until the first save for new notes. */
+  fileUri: string | null;
+  /** SAF URI of the folder (used to create the file on first save). */
+  folderUri: string | null;
   lang: string;
   width: number;
   height: number;
   backgroundPattern: BackgroundPattern;
-  // Violation: React refs are stored in XState context and mutated directly in
-  // actions for performance. The canvas native view owns the rendering; we only
-  // keep a parallel JS-side stroke array via ref so serialization can read it
-  // without an async bridge call. This makes the machine untestable in full
-  // isolation — accepted trade-off for a zero-copy hot path.
   strokesRef: MutableRefObject<Stroke[]>;
   canvasRef: MutableRefObject<DrawingCanvasRef | null>;
+  /** Strokes parsed from SVG, held between loading and restoring states. */
+  loadedStrokes: Stroke[];
+  /** Whether the native canvas surface is created and ready for commands. */
+  canvasReady: boolean;
 };
 
 export type NoteMachineOutput = {
-  fileUri: string;
+  /** SAF URI of the document, or null if the note was never saved. */
+  fileUri: string | null;
   lang: string;
 };
 
 // ── Actors (async operations) ──────────────────────────────────
 
-const loadDoc = fromPromise(async ({ input }: { input: { fileUri: string } }) => {
+const loadDoc = fromPromise(async ({ input }: { input: { fileUri: string | null } }) => {
+  if (!input.fileUri) return parseSvgDocument('');
   const svg = await loadDocument(input.fileUri);
   return parseSvgDocument(svg);
 });
+
+/**
+ * Restore strokes to the native canvas and start raw drawing.
+ *
+ * Guaranteed sequence:
+ * 1. loadStrokes — renders saved strokes to the offscreen bitmap and blits
+ *    to the SurfaceView. Screen is NOT frozen yet, so the e-ink panel
+ *    physically displays the strokes.
+ * 2. startDrawing — opens Onyx SDK raw drawing mode, freezing the screen
+ *    for normal Android rendering but enabling low-latency stylus input.
+ */
+const restoreAndStart = fromPromise(
+  async ({
+    input,
+  }: {
+    input: {
+      canvasRef: MutableRefObject<DrawingCanvasRef | null>;
+      strokes: Stroke[];
+    };
+  }) => {
+    const canvas = input.canvasRef.current;
+    if (!canvas) throw new Error('Canvas ref is null during restore');
+
+    if (input.strokes.length > 0) {
+      const nativeStrokes: NativeStrokeData[] = input.strokes.map((s) => ({
+        points: encodePoints(s.points),
+        color: s.color,
+        width: s.width,
+      }));
+      await canvas.loadStrokes(nativeStrokes);
+    }
+
+    await canvas.startDrawing();
+  },
+);
 
 const serializeAndSave = fromPromise(
   async ({
     input,
   }: {
     input: {
-      fileUri: string;
+      fileUri: string | null;
+      folderUri: string | null;
       strokesRef: MutableRefObject<Stroke[]>;
       width: number;
       height: number;
       backgroundPattern: BackgroundPattern;
     };
-  }) => {
+  }): Promise<{ fileUri: string }> => {
     const svg = serializeSvgDocument(
       input.strokesRef.current,
       input.width,
       input.height,
       input.backgroundPattern,
     );
-    await saveDocument(input.fileUri, svg);
+
+    if (input.fileUri) {
+      await saveDocument(input.fileUri, svg);
+      return { fileUri: input.fileUri };
+    }
+
+    // New note — create the file on first save.
+    if (!input.folderUri) throw new Error('folderUri is required to create a new document');
+    const { uri } = await createDocument(input.folderUri);
+    await saveDocument(uri, svg);
+    return { fileUri: uri };
+  },
+);
+
+/**
+ * Close raw drawing and trigger a full e-ink refresh.
+ *
+ * Guaranteed sequence:
+ * 1. stopDrawing — closes Onyx SDK raw drawing permanently, unfreezes
+ *    the e-ink screen. The SurfaceView surface stays alive so the bitmap
+ *    (with all strokes) remains visible.
+ * 2. refreshScreen — GC waveform drives every pixel black→white,
+ *    clearing any ghosting from the drawing session.
+ *
+ * Only after both complete does the machine transition to the final
+ * `closed` state, which triggers navigation away.
+ */
+const stopAndRefresh = fromPromise(
+  async ({
+    input,
+  }: {
+    input: {
+      canvasRef: MutableRefObject<DrawingCanvasRef | null>;
+    };
+  }) => {
+    const canvas = input.canvasRef.current;
+    if (canvas) {
+      await canvas.stopDrawing();
+    }
+    await refreshScreen();
   },
 );
 
@@ -80,13 +163,21 @@ export const noteMachine = setup({
     input: {} as NoteMachineInput,
     output: {} as NoteMachineOutput,
     events: {} as
-      | { type: 'STROKE_END'; points: string; color: string; width: number }
+      | { type: 'STROKE_END'; points: string; color: string; width: number; style?: StrokeStyle }
       | { type: 'ERASE_END'; indices: number[] }
-      | { type: 'CLOSE' },
+      | { type: 'CANVAS_READY' }
+      | { type: 'CLOSE' }
+      | { type: 'TOOLBAR_EXPANDED' }
+      | { type: 'TOOLBAR_COLLAPSED' },
   },
   actors: {
     loadDoc,
+    restoreAndStart,
     serializeAndSave,
+    stopAndRefresh,
+  },
+  guards: {
+    isCanvasReady: ({ context }) => context.canvasReady,
   },
   actions: {
     addStroke: ({ context, event }) => {
@@ -97,6 +188,7 @@ export const noteMachine = setup({
         points,
         color: event.color,
         width: event.width,
+        ...(event.style && event.style !== 'pencil' && { style: event.style }),
       });
     },
     eraseStrokes: ({ context, event }) => {
@@ -106,18 +198,27 @@ export const noteMachine = setup({
         (_, i) => !indicesToRemove.has(i),
       );
     },
+    pauseDrawing: ({ context }) => {
+      context.canvasRef.current?.pauseDrawing();
+    },
+    resumeDrawing: ({ context }) => {
+      context.canvasRef.current?.resumeDrawing();
+    },
   },
 }).createMachine({
   id: 'note',
 
   context: ({ input }) => ({
     fileUri: input.fileUri,
+    folderUri: input.folderUri,
     lang: input.lang,
     width: input.width,
     height: input.height,
     backgroundPattern: input.backgroundPattern,
     strokesRef: input.strokesRef,
     canvasRef: input.canvasRef,
+    loadedStrokes: [],
+    canvasReady: false,
   }),
 
   initial: 'loading',
@@ -128,31 +229,76 @@ export const noteMachine = setup({
   }),
 
   states: {
+    // Phase 1: Load the SVG file and parse strokes.
+    // Also accepts CANVAS_READY — the native surface may become ready
+    // before or after the SVG loads.
     loading: {
       invoke: {
         src: 'loadDoc',
         input: ({ context }) => ({ fileUri: context.fileUri }),
+        onDone: [
+          {
+            // Canvas already ready — go straight to restoring.
+            target: 'restoring',
+            guard: 'isCanvasReady',
+            actions: [
+              ({ context, event }) => {
+                context.strokesRef.current = event.output.strokes;
+              },
+              assign({
+                loadedStrokes: ({ event }) => event.output.strokes,
+              }),
+            ],
+          },
+          {
+            // Canvas not ready yet — wait for it.
+            target: 'waitingForCanvas',
+            actions: [
+              ({ context, event }) => {
+                context.strokesRef.current = event.output.strokes;
+              },
+              assign({
+                loadedStrokes: ({ event }) => event.output.strokes,
+              }),
+            ],
+          },
+        ],
+        onError: {
+          target: 'error',
+        },
+      },
+      on: {
+        CANVAS_READY: {
+          actions: assign({ canvasReady: () => true }),
+        },
+      },
+    },
+
+    // SVG loaded but native canvas not ready yet. Wait for it.
+    waitingForCanvas: {
+      on: {
+        CANVAS_READY: {
+          target: 'restoring',
+          actions: assign({ canvasReady: () => true }),
+        },
+      },
+    },
+
+    // Phase 2: Render loaded strokes to the native bitmap (visible on
+    // e-ink because raw drawing is not active yet), then open raw drawing.
+    // Full e-ink refresh on entry clears ghosting from the document list.
+    restoring: {
+      entry: () => {
+        refreshScreen();
+      },
+      invoke: {
+        src: 'restoreAndStart',
+        input: ({ context }) => ({
+          canvasRef: context.canvasRef,
+          strokes: context.loadedStrokes,
+        }),
         onDone: {
           target: 'editing',
-          actions: ({ context, event }) => {
-            const { strokes } = event.output;
-            context.strokesRef.current = strokes;
-
-            const canvas = context.canvasRef.current;
-            if (canvas && strokes.length > 0) {
-              const nativeStrokes: NativeStrokeData[] = strokes.map((s) => ({
-                points: encodePoints(s.points),
-                color: s.color,
-                width: s.width,
-              }));
-              // Violation: fire-and-forget — the native canvas handles its own
-              // error state; we only need the JS-side ref (set above) for
-              // serialization. A load failure here is non-fatal.
-              canvas.loadStrokes(nativeStrokes).catch((error: unknown) => {
-                console.warn('Failed to load strokes into native canvas:', error);
-              });
-            }
-          },
         },
         onError: {
           target: 'error',
@@ -162,6 +308,19 @@ export const noteMachine = setup({
 
     editing: {
       initial: 'clean',
+
+      // Toolbar expand/collapse pauses/resumes raw drawing so that
+      // overlay views (color pickers, width selectors) receive touch
+      // events while the toolbar is open. Handled at the editing level
+      // so both clean and dirty sub-states respond.
+      on: {
+        TOOLBAR_EXPANDED: {
+          actions: 'pauseDrawing',
+        },
+        TOOLBAR_COLLAPSED: {
+          actions: 'resumeDrawing',
+        },
+      },
 
       states: {
         clean: {
@@ -175,7 +334,7 @@ export const noteMachine = setup({
               actions: 'eraseStrokes',
             },
             CLOSE: {
-              target: '#note.closed',
+              target: '#note.stopping',
             },
           },
         },
@@ -210,6 +369,7 @@ export const noteMachine = setup({
         src: 'serializeAndSave',
         input: ({ context }) => ({
           fileUri: context.fileUri,
+          folderUri: context.folderUri,
           strokesRef: context.strokesRef,
           width: context.width,
           height: context.height,
@@ -217,9 +377,11 @@ export const noteMachine = setup({
         }),
         onDone: {
           target: 'editing.clean',
+          actions: assign({
+            fileUri: ({ event }) => event.output.fileUri,
+          }),
         },
         onError: {
-          // Save failed — go back to dirty, will retry on next timer
           target: 'editing.dirty',
         },
       },
@@ -230,16 +392,39 @@ export const noteMachine = setup({
         src: 'serializeAndSave',
         input: ({ context }) => ({
           fileUri: context.fileUri,
+          folderUri: context.folderUri,
           strokesRef: context.strokesRef,
           width: context.width,
           height: context.height,
           backgroundPattern: context.backgroundPattern,
         }),
         onDone: {
+          target: 'stopping',
+          actions: assign({
+            fileUri: ({ event }) => event.output.fileUri,
+          }),
+        },
+        onError: {
+          // Best-effort save — still stop drawing and close cleanly.
+          target: 'stopping',
+        },
+      },
+    },
+
+    // Phase 3: Close raw drawing and refresh the e-ink display.
+    // Runs AFTER saving so the SVG is on disk, and BEFORE the final
+    // state so navigation only happens once the screen has settled.
+    stopping: {
+      invoke: {
+        src: 'stopAndRefresh',
+        input: ({ context }) => ({
+          canvasRef: context.canvasRef,
+        }),
+        onDone: {
           target: 'closed',
         },
         onError: {
-          // Best effort — don't block close
+          // Best-effort — don't block exit if refresh fails.
           target: 'closed',
         },
       },
@@ -252,7 +437,7 @@ export const noteMachine = setup({
     error: {
       on: {
         CLOSE: {
-          target: 'closed',
+          target: 'stopping',
         },
       },
     },

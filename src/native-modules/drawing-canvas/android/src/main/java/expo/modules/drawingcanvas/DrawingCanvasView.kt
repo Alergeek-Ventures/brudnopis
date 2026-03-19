@@ -47,6 +47,7 @@ class DrawingCanvasView(
 
     override val shouldUseAndroidLayout: Boolean = true
 
+    val onReady by EventDispatcher()
     val onStrokeEnd by EventDispatcher()
     val onEraseEnd by EventDispatcher()
 
@@ -67,9 +68,14 @@ class DrawingCanvasView(
     // indices to splice, and new strokes are always appended.
     private val strokes = mutableListOf<StrokeData>()
 
+    // Current pen settings — updated via props from React Native.
+    private var currentStrokeStyle: String = "pencil"
+    private var currentStrokeColor: Int = Color.BLACK
+    private var currentStrokeWidth: Float = 5f
+
     private val strokePaint = Paint().apply {
         color = Color.BLACK
-        strokeWidth = 3f
+        strokeWidth = 5f
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
@@ -121,7 +127,14 @@ class DrawingCanvasView(
             drawBackground(bitmapCanvas!!, w, h)
             drawBitmapToSurface()
 
+            // Initialize the Onyx SDK but do NOT open raw drawing yet.
+            // Raw drawing freezes the e-ink screen for normal Android rendering,
+            // so we must finish loading + rendering existing strokes first.
+            // The JS-side XState machine calls startDrawing() after loadStrokes.
             initTouchHelper()
+
+            // Signal to JS that the canvas is ready to receive commands.
+            onReady(emptyMap<String, Any>())
         }
 
         override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
@@ -199,6 +212,14 @@ class DrawingCanvasView(
 
     // ── Onyx integration (all SDK access via OnyxHelper) ───────────
 
+    /**
+     * Initialize the Onyx SDK TouchHelper and configure it, but do NOT open
+     * raw drawing. Raw drawing freezes the e-ink screen for normal Android
+     * rendering — opening it must be deferred until after existing strokes
+     * are loaded and blitted to the SurfaceView.
+     *
+     * Call startDrawing() separately to open raw drawing mode.
+     */
     private fun initTouchHelper() {
         try {
             val helper = OnyxHelper(
@@ -208,10 +229,10 @@ class DrawingCanvasView(
                 onEraserDrawn = { points -> handleEraserPoints(points) },
                 onEraserFinished = { handleEraseEnd() },
             )
-            helper.configure(strokePaint.strokeWidth, strokePaint.color, surfaceView.width, surfaceView.height)
-            helper.openRawDrawing()
+            val sdkStyle = try { OnyxHelper.styleStringToInt(currentStrokeStyle) } catch (_: Throwable) { 0 }
+            helper.configure(strokePaint.strokeWidth, strokePaint.color, sdkStyle, surfaceView.width, surfaceView.height)
             onyxHelper = helper
-            android.util.Log.i("DrawingCanvas", "OnyxHelper initialized successfully")
+            android.util.Log.i("DrawingCanvas", "OnyxHelper initialized (raw drawing NOT started)")
         } catch (e: NoClassDefFoundError) {
             android.util.Log.w("DrawingCanvas", "Onyx SDK not available: ${e.message}")
             onyxHelper = null
@@ -219,6 +240,72 @@ class DrawingCanvasView(
             android.util.Log.e("DrawingCanvas", "OnyxHelper init failed: ${e.javaClass.name}: ${e.message}")
             e.printStackTrace()
             onyxHelper = null
+        }
+    }
+
+    /**
+     * Open raw drawing mode — freezes the e-ink screen for Android rendering
+     * and starts capturing stylus input. Called by the JS-side XState machine
+     * AFTER loadStrokes has completed and the bitmap is visible on screen.
+     */
+    fun startDrawing() {
+        try {
+            val helper = onyxHelper as? OnyxHelper ?: return
+            helper.openRawDrawing()
+            android.util.Log.i("DrawingCanvas", "Raw drawing started")
+        } catch (e: Throwable) {
+            android.util.Log.w("DrawingCanvas", "startDrawing failed: ${e.message}")
+        }
+    }
+
+    /**
+     * Close raw drawing mode permanently — disables SDK input capture and
+     * releases resources. The SurfaceView surface stays alive so the bitmap
+     * remains visible until the view unmounts.
+     *
+     * Blits the current bitmap to the SurfaceView BEFORE closing raw drawing
+     * so the e-ink panel shows up-to-date content (including new strokes drawn
+     * during this session) when the screen unfreezes.
+     *
+     * Idempotent: safe to call when raw drawing is already closed.
+     * Called by the JS-side XState machine before navigating away.
+     */
+    fun stopDrawing() {
+        drawBitmapToSurface()
+        closeTouchHelper()
+        android.util.Log.i("DrawingCanvas", "Raw drawing stopped")
+    }
+
+    /**
+     * Temporarily disable raw drawing — unfreezes the e-ink screen for normal
+     * Android rendering so overlay views (toolbar) receive touch events.
+     * Blits the current bitmap to the SurfaceView first so the user sees
+     * up-to-date content while drawing is paused.
+     *
+     * Call resumeDrawing() to re-enable. Does NOT null the OnyxHelper.
+     */
+    fun pauseDrawing() {
+        try {
+            drawBitmapToSurface()
+            val helper = onyxHelper as? OnyxHelper ?: return
+            helper.setRawDrawingEnabled(false)
+            android.util.Log.i("DrawingCanvas", "Raw drawing paused")
+        } catch (e: Throwable) {
+            android.util.Log.w("DrawingCanvas", "pauseDrawing failed: ${e.message}")
+        }
+    }
+
+    /**
+     * Re-enable raw drawing after a pause. Freezes the e-ink screen again
+     * and resumes stylus input capture.
+     */
+    fun resumeDrawing() {
+        try {
+            val helper = onyxHelper as? OnyxHelper ?: return
+            helper.setRawDrawingEnabled(true)
+            android.util.Log.i("DrawingCanvas", "Raw drawing resumed")
+        } catch (e: Throwable) {
+            android.util.Log.w("DrawingCanvas", "resumeDrawing failed: ${e.message}")
         }
     }
 
@@ -520,6 +607,63 @@ class DrawingCanvasView(
     }
 
     /**
+     * Set the stroke style. Called by the Expo Modules prop setter.
+     * Supported values: "pencil", "fountain", "marker".
+     */
+    fun setStrokeStyleProp(style: String) {
+        if (currentStrokeStyle == style) return
+        currentStrokeStyle = style
+        try {
+            (onyxHelper as? OnyxHelper)?.updateStrokeStyle(OnyxHelper.styleStringToInt(style))
+        } catch (_: Throwable) {}
+    }
+
+    /**
+     * Set the stroke color. Called by the Expo Modules prop setter.
+     * @param colorStr hex color string like "#FF0000".
+     */
+    fun setStrokeColorProp(colorStr: String) {
+        val parsedColor = try { Color.parseColor(colorStr) } catch (_: Throwable) { Color.BLACK }
+        if (currentStrokeColor == parsedColor) return
+        currentStrokeColor = parsedColor
+        strokePaint.color = parsedColor
+        try {
+            (onyxHelper as? OnyxHelper)?.updateStrokeColor(parsedColor)
+        } catch (_: Throwable) {}
+    }
+
+    /**
+     * Set the stroke width. Called by the Expo Modules prop setter.
+     */
+    fun setStrokeWidthProp(width: Float) {
+        if (currentStrokeWidth == width) return
+        currentStrokeWidth = width
+        strokePaint.strokeWidth = width
+        try {
+            (onyxHelper as? OnyxHelper)?.updateStrokeWidth(width)
+        } catch (_: Throwable) {}
+    }
+
+    /**
+     * Set the exclude rects — areas where the SDK should not capture pen input.
+     * Called by the Expo Modules prop setter.
+     *
+     * Each rect is a map with "x", "y", "width", "height" as Numbers.
+     */
+    fun setExcludeRectsProp(rects: List<Map<String, Any>>) {
+        val nativeRects = rects.mapNotNull { map ->
+            val x = (map["x"] as? Number)?.toInt() ?: return@mapNotNull null
+            val y = (map["y"] as? Number)?.toInt() ?: return@mapNotNull null
+            val w = (map["width"] as? Number)?.toInt() ?: return@mapNotNull null
+            val h = (map["height"] as? Number)?.toInt() ?: return@mapNotNull null
+            Rect(x, y, x + w, y + h)
+        }
+        try {
+            (onyxHelper as? OnyxHelper)?.updateExcludeRects(nativeRects)
+        } catch (_: Throwable) {}
+    }
+
+    /**
      * Load strokes from serialized data and render them to the bitmap.
      * Used for the resume flow: load SVG → parse data-points → loadStrokes.
      *
@@ -578,7 +722,9 @@ class DrawingCanvasView(
         }
 
         strokeCount = strokes.size
-        forceScreenRefresh()
+        // Just blit to surface — raw drawing is not active yet at this point.
+        // The JS-side machine calls startDrawing() after this completes.
+        drawBitmapToSurface()
     }
 
     fun clear() {

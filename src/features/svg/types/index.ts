@@ -8,6 +8,9 @@ export type Point = {
   t: number;
 };
 
+/** Pen style — maps to Onyx SDK stroke styles on the native side. */
+export type StrokeStyle = 'pencil' | 'fountain' | 'marker';
+
 /** A single stroke: a sequence of points with visual properties. */
 export type Stroke = {
   points: Point[];
@@ -15,6 +18,8 @@ export type Stroke = {
   color: string;
   /** Stroke width in pixels. */
   width: number;
+  /** Pen style. Defaults to "pencil" for backward compatibility. */
+  style?: StrokeStyle;
 };
 
 /** Canvas background pattern. Stored in SVG as `data-background` on the root element. */

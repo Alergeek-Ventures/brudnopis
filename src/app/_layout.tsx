@@ -42,6 +42,7 @@ export default function RootLayout() {
                 <Stack.Screen name="canvas" options={{ gestureEnabled: false }} />
                 <Stack.Screen name="folder-picker" />
                 <Stack.Screen name="settings" />
+                <Stack.Screen name="trash" />
               </Stack>
               <StatusBar style="light" />
             </SafeAreaListener>

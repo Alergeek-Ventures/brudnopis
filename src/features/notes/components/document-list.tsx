@@ -2,22 +2,31 @@ import { LegendList } from '@legendapp/list/react-native';
 import { MaterialIcons } from '@react-native-vector-icons/material-icons';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { router } from 'expo-router';
-import { useMemo } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { useEffect, useMemo } from 'react';
+import { Alert, Pressable, Text, View } from 'react-native';
 import { Path, Svg } from 'react-native-svg';
 
 import type { DocumentInfo } from '@/features/storage/types';
 import { formatDisplayName } from '@/features/storage/utilities/naming';
 import {
   clearSavedFolderUri,
-  createDocument,
   getSavedFolderUri,
   listDocuments,
 } from '@/features/storage/utilities/storage';
+import {
+  getTrashedUris,
+  purgeExpiredTrash,
+  trashDocument,
+} from '@/features/storage/utilities/trash';
 import { parseSvgDocument } from '@/features/svg/utilities/svg-parser';
 import { pointsToPathD } from '@/features/svg/utilities/svg-serializer';
 
 function useDocumentList() {
+  // Purge expired trash items on first mount (fire-and-forget).
+  useEffect(() => {
+    purgeExpiredTrash();
+  }, []);
+
   const folderQuery = useQuery({
     queryKey: ['folderUri'],
     queryFn: getSavedFolderUri,
@@ -32,6 +41,11 @@ function useDocumentList() {
     enabled: !!folderUri,
   });
 
+  const trashedQuery = useQuery({
+    queryKey: ['trashedUris'],
+    queryFn: getTrashedUris,
+  });
+
   // Redirect to folder picker when no folder is saved.
   // Checked after query settles to avoid redirecting on initial load.
   if (folderQuery.isSuccess && !folderUri) {
@@ -44,23 +58,41 @@ function useDocumentList() {
     router.replace('/folder-picker');
   }
 
-  const createMutation = useMutation({
-    mutationFn: (uri: string) => createDocument(uri),
-    onSuccess: ({ uri }) => {
-      router.push({ pathname: '/canvas', params: { fileUri: uri } });
-    },
+  // Filter out trashed documents from the main list.
+  const trashedUris = trashedQuery.data;
+  const documents = useMemo(() => {
+    const allDocs = documentsQuery.data ?? [];
+    if (!trashedUris || trashedUris.size === 0) return allDocs;
+    return allDocs.filter((doc) => !trashedUris.has(doc.uri));
+  }, [documentsQuery.data, trashedUris]);
+
+  const trashMutation = useMutation({
+    mutationFn: ({ uri, filename }: { uri: string; filename: string }) =>
+      trashDocument(uri, filename),
   });
 
   const handleNewDocument = () => {
-    if (!folderUri || createMutation.isPending) return;
-    createMutation.mutate(folderUri);
+    if (!folderUri) return;
+    router.push({ pathname: '/canvas', params: { folderUri } });
+  };
+
+  const handleTrashDocument = (doc: DocumentInfo) => {
+    Alert.alert('Move to Trash?', 'This note will be permanently deleted after 7 days.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Move to Trash',
+        style: 'destructive',
+        onPress: () => trashMutation.mutate({ uri: doc.uri, filename: doc.filename }),
+      },
+    ]);
   };
 
   return {
-    documents: documentsQuery.data ?? [],
+    documents,
     isLoading: folderQuery.isLoading || documentsQuery.isLoading,
-    isCreating: createMutation.isPending,
+    isRefetching: documentsQuery.isRefetching,
     handleNewDocument,
+    handleTrashDocument,
   };
 }
 
@@ -98,12 +130,26 @@ function NoteThumbnail({ svgContent }: { svgContent: string }) {
   );
 }
 
-function NoteCard({ item, onPress }: { item: DocumentInfo; onPress: () => void }) {
+function NoteCard({
+  item,
+  loading,
+  onPress,
+  onLongPress,
+}: {
+  item: DocumentInfo;
+  loading?: boolean;
+  onPress: () => void;
+  onLongPress: () => void;
+}) {
   return (
-    <Pressable onPress={onPress} className="flex-1">
+    <Pressable onPress={onPress} onLongPress={onLongPress} className="flex-1">
       <View className="overflow-hidden rounded-lg border border-gray-300 bg-white">
         <View style={{ aspectRatio: THUMBNAIL_ASPECT_RATIO }}>
-          {item.svgContent ? (
+          {loading ? (
+            <View className="flex-1 items-center justify-center bg-gray-100">
+              <Text className="text-sm text-gray-600">Loading...</Text>
+            </View>
+          ) : item.svgContent ? (
             <NoteThumbnail svgContent={item.svgContent} />
           ) : (
             <View className="flex-1 items-center justify-center bg-gray-100">
@@ -122,14 +168,22 @@ function NoteCard({ item, onPress }: { item: DocumentInfo; onPress: () => void }
 }
 
 export function DocumentList() {
-  const { documents, isLoading, isCreating, handleNewDocument } = useDocumentList();
+  const { documents, isLoading, isRefetching, handleNewDocument, handleTrashDocument } =
+    useDocumentList();
 
   const handleOpenDocument = (doc: DocumentInfo) => {
     router.push({ pathname: '/canvas', params: { fileUri: doc.uri } });
   };
 
   const renderItem = ({ item }: { item: DocumentInfo }) => {
-    return <NoteCard item={item} onPress={() => handleOpenDocument(item)} />;
+    return (
+      <NoteCard
+        item={item}
+        loading={isRefetching}
+        onPress={() => handleOpenDocument(item)}
+        onLongPress={() => handleTrashDocument(item)}
+      />
+    );
   };
 
   if (isLoading) {
@@ -145,17 +199,22 @@ export function DocumentList() {
       <View className="border-b border-gray-300 px-6 pb-4 pt-4">
         <View className="flex-row items-center justify-between">
           <Text className="text-2xl font-bold text-black">Notes</Text>
-          <View className="flex-row items-center gap-3">
+          <View className="flex-row items-center gap-4">
             <Pressable
               onPress={() => router.push('/settings')}
-              className="rounded-lg bg-gray-200 p-2.5 active:bg-gray-300"
+              className="rounded-lg border border-gray-400 bg-gray-200 px-4 py-2.5 active:bg-gray-300"
             >
               <MaterialIcons name="settings" size={20} color="black" />
             </Pressable>
             <Pressable
+              onPress={() => router.push('/trash')}
+              className="rounded-lg border border-gray-400 bg-gray-200 px-4 py-2.5 active:bg-gray-300"
+            >
+              <MaterialIcons name="delete" size={20} color="black" />
+            </Pressable>
+            <Pressable
               onPress={handleNewDocument}
-              disabled={isCreating}
-              className="rounded-lg bg-sky-700 p-2.5 active:bg-sky-900 disabled:opacity-50"
+              className="rounded-lg border border-sky-800 bg-sky-700 px-4 py-2.5 active:bg-sky-900"
             >
               <MaterialIcons name="add" size={22} color="white" />
             </Pressable>

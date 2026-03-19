@@ -106,24 +106,40 @@ export async function listDocuments(folderUri: string): Promise<DocumentInfo[]> 
 // ── Document CRUD ──────────────────────────────────────────────
 
 /**
- * Ensure SAF document ID segments are percent-encoded.
+ * Percent-encode colons and slashes inside a SAF ID segment.
  *
- * SAF URIs have the structure: content://authority/tree/<treeId>/document/<docId>
- * The native APIs require <treeId> and <docId> to have colons and slashes
- * percent-encoded (%3A, %2F). However, URIs may arrive decoded — e.g. when
- * passed through expo-router search params, which decode percent sequences.
+ * Idempotent: already-encoded URIs contain no literal colons or slashes
+ * in the ID segments, so the replacements are no-ops.
+ */
+function encodeSafId(id: string): string {
+  return id.replace(/:/g, '%3A').replace(/\//g, '%2F');
+}
+
+/**
+ * Ensure SAF URI ID segments are percent-encoded.
  *
- * This function is idempotent: already-encoded URIs pass through unchanged
- * because they contain no literal colons or slashes in the ID segments.
+ * SAF URIs may arrive decoded — e.g. when passed through expo-router search
+ * params, which decode percent sequences. The native APIs require the tree ID
+ * and document ID segments to have colons and slashes percent-encoded.
+ *
+ * Handles both forms:
+ *   content://authority/tree/<treeId>/document/<docId>
+ *   content://authority/tree/<treeId>          (folder-only)
  */
 function ensureSafUriEncoded(uri: string): string {
-  return uri.replace(
-    /^(content:\/\/[^/]+\/tree\/)(.*)(\/document\/)(.*)/,
-    (_match, prefix, treeId, middle, docId) => {
-      const encodeId = (id: string) => id.replace(/:/g, '%3A').replace(/\//g, '%2F');
-      return `${prefix}${encodeId(treeId)}${middle}${encodeId(docId)}`;
-    },
-  );
+  // Full document URI: tree + document segments.
+  const docMatch = uri.match(/^(content:\/\/[^/]+\/tree\/)(.*)(\/document\/)(.*)/);
+  if (docMatch) {
+    return `${docMatch[1]}${encodeSafId(docMatch[2])}${docMatch[3]}${encodeSafId(docMatch[4])}`;
+  }
+
+  // Tree-only URI (folder): just the tree segment.
+  const treeMatch = uri.match(/^(content:\/\/[^/]+\/tree\/)(.*)/);
+  if (treeMatch) {
+    return `${treeMatch[1]}${encodeSafId(treeMatch[2])}`;
+  }
+
+  return uri;
 }
 
 /**
@@ -134,8 +150,17 @@ export async function createDocument(
   folderUri: string,
 ): Promise<{ uri: string; filename: string }> {
   const filename = generateFilename();
-  const uri = await StorageAccessFramework.createFileAsync(folderUri, filename, 'image/svg+xml');
+  const encoded = ensureSafUriEncoded(folderUri);
+  const uri = await StorageAccessFramework.createFileAsync(encoded, filename, 'image/svg+xml');
   return { uri, filename };
+}
+
+/**
+ * Delete a document from the filesystem permanently.
+ */
+export async function deleteDocument(fileUri: string): Promise<void> {
+  const encoded = ensureSafUriEncoded(fileUri);
+  await StorageAccessFramework.deleteAsync(encoded, { idempotent: true });
 }
 
 /**

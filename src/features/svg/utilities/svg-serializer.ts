@@ -76,9 +76,12 @@ export function serializeSvgDocument(
 
     const d = pointsToPathD(stroke);
     const dataPoints = encodePoints(stroke.points);
+    // Only emit data-style when non-default (pencil) for backward compatibility.
+    const styleAttr =
+      stroke.style && stroke.style !== 'pencil' ? ` data-style="${stroke.style}"` : '';
 
     lines.push(
-      `  <path d="${d}" stroke="${stroke.color}" stroke-width="${stroke.width}" stroke-linecap="round" stroke-linejoin="round" fill="none" data-points="${dataPoints}"/>`,
+      `  <path d="${d}" stroke="${stroke.color}" stroke-width="${stroke.width}" stroke-linecap="round" stroke-linejoin="round" fill="none" data-points="${dataPoints}"${styleAttr}/>`,
     );
   }
 

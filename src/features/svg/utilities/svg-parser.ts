@@ -1,4 +1,4 @@
-import type { BackgroundPattern, Stroke } from '../types';
+import type { BackgroundPattern, Stroke, StrokeStyle } from '../types';
 
 import { decodePoints } from './points';
 
@@ -56,7 +56,14 @@ export function parseSvgDocument(svg: string): ParsedDocument {
     const widthMatch = /stroke-width="([^"]*)"/.exec(attrs);
     const width = widthMatch ? Number(widthMatch[1]) : 3;
 
-    strokes.push({ points, color, width });
+    // Extract stroke style — only set when explicitly present (default is pencil/undefined).
+    const styleMatch = /data-style="([^"]*)"/.exec(attrs);
+    const style: StrokeStyle | undefined =
+      styleMatch && (styleMatch[1] === 'fountain' || styleMatch[1] === 'marker')
+        ? styleMatch[1]
+        : undefined;
+
+    strokes.push({ points, color, width, ...(style && { style }) });
   }
 
   return { strokes, backgroundPattern };

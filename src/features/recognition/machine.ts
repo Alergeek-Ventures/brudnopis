@@ -4,7 +4,7 @@ import InkRecognition from 'ink-recognition';
 import type { MutableRefObject } from 'react';
 import { assign, fromPromise, sendTo, setup } from 'xstate';
 import { loadDocument, saveDocument } from '@/features/storage/utilities/storage';
-import type { BackgroundPattern, Stroke } from '@/features/svg/types';
+import type { BackgroundPattern, Stroke, StrokeStyle } from '@/features/svg/types';
 import { insertMetadata } from '@/features/svg/utilities/metadata';
 import { parseSvgDocument } from '@/features/svg/utilities/svg-parser';
 
@@ -35,7 +35,8 @@ type NoteLifecycleContext = {
   // the child note-machine for performance. See note-machine.ts for rationale.
   /** Current note being edited or just closed. */
   current: {
-    fileUri: string;
+    fileUri: string | null;
+    folderUri: string | null;
     lang: string;
     width: number;
     height: number;
@@ -78,7 +79,8 @@ export const noteLifecycleMachine = setup({
     events: {} as
       | {
           type: 'OPEN_NOTE';
-          fileUri: string;
+          fileUri: string | null;
+          folderUri: string | null;
           lang: string;
           width: number;
           height: number;
@@ -86,19 +88,29 @@ export const noteLifecycleMachine = setup({
           strokesRef: MutableRefObject<Stroke[]>;
           canvasRef: MutableRefObject<DrawingCanvasRef | null>;
         }
-      | { type: 'STROKE_END'; points: string; color: string; width: number }
+      | { type: 'STROKE_END'; points: string; color: string; width: number; style?: StrokeStyle }
       | { type: 'ERASE_END'; indices: number[] }
-      | { type: 'CLOSE_NOTE' },
+      | { type: 'CANVAS_READY' }
+      | { type: 'CLOSE_NOTE' }
+      | { type: 'TOOLBAR_EXPANDED' }
+      | { type: 'TOOLBAR_COLLAPSED' },
   },
   actors: {
     noteMachine,
+    /** Provided at runtime: refetch document list then navigate back. */
+    refetchAndNavigate: fromPromise(async () => {}),
     loadForRecognition,
     recognize,
     persistRecognition,
   },
+  guards: {
+    wasNeverSaved: ({ context }) => context.current?.fileUri == null,
+    isEmptySvg: (_, params: { svg: string }) => {
+      const { strokes } = parseSvgDocument(params.svg);
+      return strokes.length === 0;
+    },
+  },
   actions: {
-    /** Provided at runtime: navigate back after note closes. */
-    onNoteClosed: () => {},
     /** Provided at runtime: invalidate React Query document list cache. */
     onRecognitionComplete: () => {},
     recordError: assign({
@@ -142,6 +154,7 @@ export const noteLifecycleMachine = setup({
           actions: assign({
             current: ({ event }) => ({
               fileUri: event.fileUri,
+              folderUri: event.folderUri,
               lang: event.lang,
               width: event.width,
               height: event.height,
@@ -163,6 +176,7 @@ export const noteLifecycleMachine = setup({
           if (!c) throw new Error('No current note in editing state');
           return {
             fileUri: c.fileUri,
+            folderUri: c.folderUri,
             lang: c.lang,
             width: c.width,
             height: c.height,
@@ -172,20 +186,17 @@ export const noteLifecycleMachine = setup({
           };
         },
         onDone: {
-          target: 'recognizing',
-          actions: [
-            assign({
-              current: ({ context, event }) => {
-                if (!context.current) return null;
-                return {
-                  ...context.current,
-                  fileUri: event.output.fileUri,
-                  lang: event.output.lang,
-                };
-              },
-            }),
-            { type: 'onNoteClosed' },
-          ],
+          target: 'navigating',
+          actions: assign({
+            current: ({ context, event }) => {
+              if (!context.current) return null;
+              return {
+                ...context.current,
+                fileUri: event.output.fileUri,
+                lang: event.output.lang,
+              };
+            },
+          }),
         },
       },
       on: {
@@ -195,6 +206,7 @@ export const noteLifecycleMachine = setup({
             points: event.points,
             color: event.color,
             width: event.width,
+            style: event.style,
           })),
         },
         ERASE_END: {
@@ -203,8 +215,17 @@ export const noteLifecycleMachine = setup({
             indices: event.indices,
           })),
         },
+        CANVAS_READY: {
+          actions: sendTo('noteEditor', { type: 'CANVAS_READY' }),
+        },
         CLOSE_NOTE: {
           actions: sendTo('noteEditor', { type: 'CLOSE' }),
+        },
+        TOOLBAR_EXPANDED: {
+          actions: sendTo('noteEditor', { type: 'TOOLBAR_EXPANDED' }),
+        },
+        TOOLBAR_COLLAPSED: {
+          actions: sendTo('noteEditor', { type: 'TOOLBAR_COLLAPSED' }),
         },
         // Allow re-opening a different note (stops current child automatically)
         OPEN_NOTE: {
@@ -213,6 +234,7 @@ export const noteLifecycleMachine = setup({
           actions: assign({
             current: ({ event }) => ({
               fileUri: event.fileUri,
+              folderUri: event.folderUri,
               lang: event.lang,
               width: event.width,
               height: event.height,
@@ -225,6 +247,37 @@ export const noteLifecycleMachine = setup({
       },
     },
 
+    // Refetch the document list with fresh SVG content, then navigate
+    // back. Runs as a proper state so the user stays on the canvas
+    // (bitmap visible) until thumbnails are ready — no stale flash.
+    navigating: {
+      invoke: {
+        src: 'refetchAndNavigate',
+        onDone: [
+          {
+            // Note was never saved (no strokes) — skip recognition.
+            target: 'idle',
+            guard: 'wasNeverSaved',
+            actions: 'clearTransient',
+          },
+          {
+            target: 'recognizing',
+          },
+        ],
+        onError: [
+          {
+            target: 'idle',
+            guard: 'wasNeverSaved',
+            actions: 'clearTransient',
+          },
+          {
+            // Best-effort — still proceed to recognition even if refetch fails.
+            target: 'recognizing',
+          },
+        ],
+      },
+    },
+
     recognizing: {
       initial: 'loading',
 
@@ -234,14 +287,26 @@ export const noteLifecycleMachine = setup({
             src: 'loadForRecognition',
             input: ({ context }) => {
               invariant(context.current, 'current must be set in recognizing.loading');
+              invariant(context.current.fileUri, 'fileUri must be set in recognizing.loading');
               return { fileUri: context.current.fileUri };
             },
-            onDone: {
-              target: 'processing',
-              actions: assign({
-                svg: ({ event }) => event.output,
-              }),
-            },
+            onDone: [
+              {
+                // Empty or stroke-less SVG — skip recognition entirely.
+                target: '#noteLifecycle.idle',
+                guard: {
+                  type: 'isEmptySvg',
+                  params: ({ event }) => ({ svg: event.output }),
+                },
+                actions: 'clearTransient',
+              },
+              {
+                target: 'processing',
+                actions: assign({
+                  svg: ({ event }) => event.output,
+                }),
+              },
+            ],
             onError: {
               target: '#noteLifecycle.idle',
               actions: {
@@ -281,6 +346,7 @@ export const noteLifecycleMachine = setup({
             src: 'persistRecognition',
             input: ({ context }) => {
               invariant(context.current, 'current must be set in recognizing.persisting');
+              invariant(context.current.fileUri, 'fileUri must be set in recognizing.persisting');
               invariant(context.svg, 'svg must be set in recognizing.persisting');
               return {
                 fileUri: context.current.fileUri,

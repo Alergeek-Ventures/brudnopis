@@ -31,6 +31,11 @@ class OnyxHelper(
     // Pen settings saved during configure(), restored after eraser visual.
     private var penStrokeWidth: Float = 3f
     private var penStrokeColor: Int = Color.BLACK
+    private var penStrokeStyle: Int = TouchHelper.STROKE_STYLE_PENCIL
+
+    // Canvas dimensions, saved for re-calling setLimitRect when exclude rects change.
+    private var canvasWidth: Int = 0
+    private var canvasHeight: Int = 0
 
     /** Width of the eraser visual trail rendered by the SDK on e-ink. */
     private val eraserTrailWidth = 30f
@@ -65,7 +70,7 @@ class OnyxHelper(
         override fun onEndRawErasing(b: Boolean, point: TouchPoint?) {
             // Restore pen rendering settings for the next drawing stroke.
             try {
-                touchHelper.setStrokeStyle(TouchHelper.STROKE_STYLE_PENCIL)
+                touchHelper.setStrokeStyle(penStrokeStyle)
                 touchHelper.setStrokeWidth(penStrokeWidth)
                 touchHelper.setStrokeColor(penStrokeColor)
             } catch (_: Throwable) {}
@@ -87,9 +92,12 @@ class OnyxHelper(
         touchHelper = TouchHelper.create(surfaceView, callback)
     }
 
-    fun configure(strokeWidth: Float, strokeColor: Int, viewWidth: Int, viewHeight: Int) {
+    fun configure(strokeWidth: Float, strokeColor: Int, strokeStyle: Int, viewWidth: Int, viewHeight: Int) {
         penStrokeWidth = strokeWidth
         penStrokeColor = strokeColor
+        penStrokeStyle = strokeStyle
+        canvasWidth = viewWidth
+        canvasHeight = viewHeight
 
         touchHelper.setStrokeWidth(strokeWidth)
         touchHelper.setStrokeColor(strokeColor)
@@ -98,13 +106,66 @@ class OnyxHelper(
             ArrayList<Rect>()
         )
         try {
-            touchHelper.setStrokeStyle(TouchHelper.STROKE_STYLE_PENCIL)
+            touchHelper.setStrokeStyle(strokeStyle)
+        } catch (_: Throwable) {}
+    }
+
+    /**
+     * Update pen stroke style at runtime. Called when the strokeStyle prop changes.
+     */
+    fun updateStrokeStyle(style: Int) {
+        penStrokeStyle = style
+        try {
+            touchHelper.setStrokeStyle(style)
+        } catch (_: Throwable) {}
+    }
+
+    /**
+     * Update pen stroke color at runtime. Called when the strokeColor prop changes.
+     */
+    fun updateStrokeColor(color: Int) {
+        penStrokeColor = color
+        try {
+            touchHelper.setStrokeColor(color)
+        } catch (_: Throwable) {}
+    }
+
+    /**
+     * Update pen stroke width at runtime. Called when the strokeWidth prop changes.
+     */
+    fun updateStrokeWidth(width: Float) {
+        penStrokeWidth = width
+        try {
+            touchHelper.setStrokeWidth(width)
+        } catch (_: Throwable) {}
+    }
+
+    /**
+     * Update the exclude rects — areas where the SDK should NOT capture pen input.
+     * Re-calls setLimitRect with the full canvas as the limit and the given rects
+     * as exclusion zones.
+     *
+     * Note: setLimitRect takes effect on the next pen-down event without needing
+     * a raw drawing toggle. Toggling would clear the e-ink live pen layer and
+     * cause visible flickering.
+     */
+    fun updateExcludeRects(rects: List<Rect>) {
+        if (canvasWidth <= 0 || canvasHeight <= 0) return
+        try {
+            touchHelper.setLimitRect(
+                Rect(0, 0, canvasWidth, canvasHeight),
+                ArrayList(rects)
+            )
         } catch (_: Throwable) {}
     }
 
     fun openRawDrawing() {
         touchHelper.openRawDrawing()
         touchHelper.setRawDrawingEnabled(true)
+    }
+
+    fun setRawDrawingEnabled(enabled: Boolean) {
+        touchHelper.setRawDrawingEnabled(enabled)
     }
 
     fun toggleRawDrawing() {
@@ -117,5 +178,14 @@ class OnyxHelper(
             touchHelper.setRawDrawingEnabled(false)
             touchHelper.closeRawDrawing()
         } catch (_: Throwable) {}
+    }
+
+    companion object {
+        /** Map JS stroke style strings to Onyx SDK stroke style constants. */
+        fun styleStringToInt(style: String): Int = when (style) {
+            "fountain" -> TouchHelper.STROKE_STYLE_FOUNTAIN
+            "marker" -> TouchHelper.STROKE_STYLE_MARKER
+            else -> TouchHelper.STROKE_STYLE_PENCIL
+        }
     }
 }
