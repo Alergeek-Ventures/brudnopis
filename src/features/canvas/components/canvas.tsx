@@ -63,9 +63,6 @@ function CanvasContent({
     strokeWidth: 5,
   });
 
-  const toolbarStateRef = useRef(toolbarState);
-  toolbarStateRef.current = toolbarState;
-
   // Violation: useEffect for BackHandler subscription lifecycle.
   // Rationale: BackHandler requires addEventListener/remove pairing — no
   // declarative alternative exists in React Native.
@@ -106,13 +103,12 @@ function CanvasContent({
 
   const handleStrokeEnd = useCallback(
     (event: StrokeEndEvent) => {
-      const state = toolbarStateRef.current;
       send({
         type: 'STROKE_END',
         points: event.nativeEvent.points,
         color: event.nativeEvent.color,
         width: event.nativeEvent.width,
-        style: state.strokeStyle as StrokeStyle,
+        style: (event.nativeEvent.style || 'pencil') as StrokeStyle,
       });
     },
     [send],

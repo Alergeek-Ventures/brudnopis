@@ -9,6 +9,8 @@ export type StrokeEndEvent = {
     color: string;
     /** Stroke width in pixels */
     width: number;
+    /** Pen style — "pencil", "fountain", or "marker". */
+    style: string;
   };
 };
 
@@ -60,6 +62,8 @@ export type NativeStrokeData = {
   color: string;
   /** Stroke width in pixels */
   width: number;
+  /** Pen style — "pencil", "fountain", or "marker". Defaults to "pencil" on native side. */
+  style?: string;
 };
 
 export type DrawingCanvasRef = {

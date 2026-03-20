@@ -1,11 +1,13 @@
-import { MaterialIcons } from '@react-native-vector-icons/material-icons';
+import type { IconProps } from 'phosphor-react-native';
+import { CaretRight, Eraser, Highlighter, Pen, PenNib, X } from 'phosphor-react-native';
+import type { ComponentType } from 'react';
 import { useCallback, useRef, useState } from 'react';
 import { type LayoutChangeEvent, PanResponder, Pressable, View } from 'react-native';
 
 import type { StrokeStyle } from '@/features/svg/types';
 
-/** Helper type for MaterialIcons name prop. */
-type IconName = React.ComponentProps<typeof MaterialIcons>['name'];
+/** Phosphor icon component type — all toolbar icons share this shape. */
+type IconComponent = ComponentType<IconProps>;
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -70,17 +72,17 @@ const DEFAULT_PEN_SETTINGS: Record<StrokeStyle, PenSettings> = {
   marker: { color: '#FFFF00', width: 40 },
 };
 
-const TOOLS: { tool: Tool; icon: IconName; label: string }[] = [
-  { tool: 'pencil', icon: 'edit', label: 'Ballpoint' },
-  { tool: 'fountain', icon: 'create', label: 'Fountain' },
-  { tool: 'marker', icon: 'highlight', label: 'Marker' },
-  { tool: 'eraser', icon: 'auto-fix-normal', label: 'Eraser' },
+const TOOLS: { tool: Tool; Icon: IconComponent; label: string }[] = [
+  { tool: 'pencil', Icon: Pen, label: 'Ballpoint' },
+  { tool: 'fountain', Icon: PenNib, label: 'Fountain' },
+  { tool: 'marker', Icon: Highlighter, label: 'Marker' },
+  { tool: 'eraser', Icon: Eraser, label: 'Eraser' },
 ];
 
-/** Icon for each tool — derived from TOOLS to avoid duplicate mapping. */
-const TOOL_ICONS: Record<Tool, IconName> = Object.fromEntries(
-  TOOLS.map(({ tool, icon }) => [tool, icon]),
-) as Record<Tool, IconName>;
+/** Icon component for each tool — derived from TOOLS to avoid duplicate mapping. */
+const TOOL_ICONS: Record<Tool, IconComponent> = Object.fromEntries(
+  TOOLS.map(({ tool, Icon }) => [tool, Icon]),
+) as Record<Tool, IconComponent>;
 
 // ── Helpers ────────────────────────────────────────────────────
 
@@ -222,7 +224,7 @@ export function Toolbar({ onClose, onChange, onExpandedChange, onLayout }: Toolb
           {/* Row 1: Tool buttons + collapse toggle */}
           <View className="flex-row items-center border-b border-gray-300 px-2 py-1.5">
             <View className="flex-1 flex-row items-center gap-1">
-              {TOOLS.map(({ tool, icon }) => (
+              {TOOLS.map(({ tool, Icon }) => (
                 <Pressable
                   key={tool}
                   onPress={() => handleToolSelect(tool)}
@@ -230,11 +232,7 @@ export function Toolbar({ onClose, onChange, onExpandedChange, onLayout }: Toolb
                     activeTool === tool ? 'bg-black' : 'bg-gray-200 active:bg-gray-300'
                   }`}
                 >
-                  <MaterialIcons
-                    name={icon}
-                    size={18}
-                    color={activeTool === tool ? 'white' : 'black'}
-                  />
+                  <Icon size={18} color={activeTool === tool ? 'white' : 'black'} />
                 </Pressable>
               ))}
             </View>
@@ -242,7 +240,7 @@ export function Toolbar({ onClose, onChange, onExpandedChange, onLayout }: Toolb
               onPress={handleToggleExpand}
               className="ml-2 rounded-md p-2.5 active:bg-gray-200"
             >
-              <MaterialIcons name="chevron-right" size={18} color="black" />
+              <CaretRight size={18} color="black" />
             </Pressable>
           </View>
 
@@ -313,14 +311,18 @@ export function Toolbar({ onClose, onChange, onExpandedChange, onLayout }: Toolb
           onPress={onClose}
           className="rounded-l-lg border-r border-gray-300 p-3 active:bg-gray-200"
         >
-          <MaterialIcons name="close" size={20} color="black" />
+          <X size={20} color="black" />
         </Pressable>
         <Pressable onPress={handleToggleExpand} className="rounded-r-lg p-3 active:bg-gray-200">
-          <MaterialIcons
-            name={TOOL_ICONS[activeTool]}
-            size={20}
-            color={activeTool === 'eraser' ? '#888' : currentSettings.color}
-          />
+          {(() => {
+            const ActiveIcon = TOOL_ICONS[activeTool];
+            return (
+              <ActiveIcon
+                size={20}
+                color={activeTool === 'eraser' ? '#888' : currentSettings.color}
+              />
+            );
+          })()}
         </Pressable>
       </View>
     </View>

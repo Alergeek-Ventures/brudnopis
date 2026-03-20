@@ -85,6 +85,10 @@ const restoreAndStart = fromPromise(
         points: encodePoints(s.points),
         color: s.color,
         width: s.width,
+        // Only include style when defined — sending undefined through the
+        // Expo Modules bridge into Kotlin Map<String, Any> can cause issues
+        // since Any is non-nullable.
+        ...(s.style && { style: s.style }),
       }));
       await canvas.loadStrokes(nativeStrokes);
     }

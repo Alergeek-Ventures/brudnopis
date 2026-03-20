@@ -27,6 +27,8 @@ private data class StrokeData(
     val points: List<FloatArray>,
     val color: Int,
     val width: Float,
+    /** Pen style — "pencil", "fountain", or "marker". */
+    val style: String,
     /** Pre-computed bounding box for fast eraser pre-filtering. */
     val bounds: RectF,
 )
@@ -315,17 +317,35 @@ class DrawingCanvasView(
         // Accumulate points for serialization on stroke end
         currentStrokePoints.addAll(points)
 
-        renderPointsToBitmap(points, strokePaint)
+        // For fountain pen: skip per-batch bitmap rendering. The SDK's
+        // NeoFountainPenWrapper uses internal state (pressure smoothing,
+        // width interpolation) that resets between calls, so rendering
+        // partial batches produces a different result than a single full-
+        // stroke call. We render the complete stroke once in
+        // refreshAfterStroke() instead. The SDK's own e-ink layer handles
+        // the live preview, so the user still sees the stroke while drawing.
+        if (currentStrokeStyle != "fountain") {
+            renderPointsToBitmap(points, strokePaint, currentStrokeStyle)
+        }
         strokeCount++
     }
 
     /**
-     * Render a list of [x, y, pressure] points to the bitmap canvas using
-     * the given paint. Pure rendering — no side effects on stroke state.
+     * Render a list of [x, y, pressure, timestamp] points to the bitmap canvas.
+     * Pure rendering — no side effects on stroke state.
+     *
+     * For "fountain" style, varies stroke width per segment based on pressure
+     * data (index 2 of each point). For all other styles, draws a constant-
+     * width path using the paint's strokeWidth.
      */
-    private fun renderPointsToBitmap(points: List<FloatArray>, paint: Paint) {
+    private fun renderPointsToBitmap(points: List<FloatArray>, paint: Paint, style: String = "pencil") {
         val canvas = bitmapCanvas ?: return
         if (points.isEmpty()) return
+
+        if (style == "fountain") {
+            renderFountainToBitmap(points, paint)
+            return
+        }
 
         val path = Path()
         var prevX = points[0][0]
@@ -345,6 +365,33 @@ class DrawingCanvasView(
         canvas.drawPath(path, paint)
     }
 
+    /**
+     * Render fountain pen strokes using the Onyx SDK's NeoFountainPenWrapper.
+     * Delegates to OnyxHelper to keep SDK type references isolated.
+     * Falls back to constant-width rendering if the SDK is unavailable.
+     */
+    private fun renderFountainToBitmap(points: List<FloatArray>, paint: Paint) {
+        val canvas = bitmapCanvas ?: return
+        try {
+            OnyxHelper.renderFountainPen(canvas, paint, points, paint.strokeWidth)
+        } catch (_: Throwable) {
+            // SDK unavailable (non-Boox device) — fall back to constant-width path
+            val path = Path()
+            var prevX = points[0][0]
+            var prevY = points[0][1]
+            path.moveTo(prevX, prevY)
+            for (i in 1 until points.size) {
+                val x = points[i][0]
+                val y = points[i][1]
+                if (abs(prevY - y) >= 30 && abs(prevX - x) < 2) continue
+                path.quadTo(prevX, prevY, x, y)
+                prevX = x
+                prevY = y
+            }
+            canvas.drawPath(path, paint)
+        }
+    }
+
     private fun refreshAfterStroke() {
         // Don't toggle raw drawing here — that causes a delay on the next
         // pen-down because the SDK needs to re-enter raw mode. Instead, stay
@@ -355,6 +402,17 @@ class DrawingCanvasView(
         // is frozen in raw mode anyway. It will be shown when raw drawing is
         // explicitly disabled (e.g., navigating away, clear).
 
+        // For fountain pen: render the complete stroke now that all points are
+        // accumulated. Per-batch rendering was skipped in handleStrokePoints()
+        // because NeoFountainPenWrapper's pressure smoothing algorithm produces
+        // different results for partial vs complete point lists.
+        // DEBUG: log stroke info before rendering
+        val pressureSample = currentStrokePoints.take(5).joinToString { String.format("%.4f", it[2]) }
+        android.util.Log.d("DrawingCanvas", "refreshAfterStroke: style=$currentStrokeStyle, ${currentStrokePoints.size} pts, width=${strokePaint.strokeWidth}, first pressures=[$pressureSample]")
+        if (currentStrokeStyle == "fountain") {
+            renderPointsToBitmap(currentStrokePoints, strokePaint, "fountain")
+        }
+
         // Serialize accumulated stroke points as "x,y,p;x,y,p;..." packed string
         val pointsString = serializePoints(currentStrokePoints)
 
@@ -363,6 +421,7 @@ class DrawingCanvasView(
             points = currentStrokePoints.map { it.copyOf() },
             color = strokePaint.color,
             width = strokePaint.strokeWidth,
+            style = currentStrokeStyle,
             bounds = computeBounds(currentStrokePoints),
         )
         strokes.add(strokeData)
@@ -374,6 +433,7 @@ class DrawingCanvasView(
             "points" to pointsString,
             "color" to String.format("#%06X", 0xFFFFFF and strokePaint.color),
             "width" to strokePaint.strokeWidth,
+            "style" to currentStrokeStyle,
         ))
     }
 
@@ -495,7 +555,7 @@ class DrawingCanvasView(
         for (stroke in strokes) {
             paint.color = stroke.color
             paint.strokeWidth = stroke.width
-            renderPointsToBitmap(stroke.points, paint)
+            renderPointsToBitmap(stroke.points, paint, stroke.style)
         }
     }
 
@@ -677,6 +737,7 @@ class DrawingCanvasView(
     fun loadStrokes(strokeMaps: List<Map<String, Any>>) {
         val canvas = bitmapCanvas ?: return
         val bmp = bitmap ?: return
+        android.util.Log.d("DrawingCanvas", "loadStrokes: ${strokeMaps.size} strokes to load")
         drawBackground(canvas, bmp.width, bmp.height)
 
         // Clear and rebuild the retained stroke list
@@ -689,10 +750,11 @@ class DrawingCanvasView(
             isAntiAlias = true
         }
 
-        for (strokeMap in strokeMaps) {
+        for ((idx, strokeMap) in strokeMaps.withIndex()) {
             val pointsStr = strokeMap["points"] as? String ?: continue
             val colorStr = strokeMap["color"] as? String ?: "#000000"
             val widthVal = strokeMap["width"]
+            val styleStr = strokeMap["style"] as? String ?: "pencil"
 
             val parsedColor = try {
                 Color.parseColor(colorStr)
@@ -709,13 +771,19 @@ class DrawingCanvasView(
 
             val points = deserializePoints(pointsStr)
             if (points.isNotEmpty()) {
-                renderPointsToBitmap(points, paint)
+                // DEBUG: log fountain stroke pressure values on reload
+                if (styleStr == "fountain") {
+                    val pressureSample = points.take(3).joinToString { String.format("%.4f", it[2]) }
+                    android.util.Log.d("DrawingCanvas", "loadStrokes[$idx]: fountain, width=$parsedWidth, ${points.size} pts, first pressures=[$pressureSample]")
+                }
+                renderPointsToBitmap(points, paint, styleStr)
 
                 // Retain for eraser hit-testing
                 strokes.add(StrokeData(
                     points = points,
                     color = parsedColor,
                     width = parsedWidth,
+                    style = styleStr,
                     bounds = computeBounds(points),
                 ))
             }
