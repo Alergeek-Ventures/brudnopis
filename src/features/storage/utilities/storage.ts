@@ -82,8 +82,8 @@ export async function listDocuments(folderUri: string): Promise<DocumentInfo[]> 
         const svg = await readAsStringAsync(ensureSafUriEncoded(uri));
         recognizedText = extractMetadataText(svg);
         svgContent = svg;
-      } catch {
-        // File read failed — skip metadata extraction
+      } catch (err) {
+        console.error('Failed to read document:', uri, err);
       }
 
       return {

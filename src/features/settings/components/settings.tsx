@@ -3,7 +3,8 @@ import InkRecognition from 'ink-recognition';
 import { useAtom } from 'jotai';
 import { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
-import { activeLanguageAtom, downloadedModelsAtom } from '@/features/settings/atoms';
+import { activeLanguageAtom } from '@/features/settings/atoms/active-language';
+import { downloadedModelsAtom } from '@/features/settings/atoms/downloaded-models';
 import { pickFolder } from '@/features/storage/utilities/storage';
 
 type Language = {
@@ -59,7 +60,7 @@ function LanguageRow({
       </Pressable>
 
       <View className="flex-row items-center gap-3">
-        {isActive && <Text className="text-sm font-semibold text-sky-700">Active</Text>}
+        {isActive ? <Text className="text-sm font-semibold text-sky-700">Active</Text> : null}
 
         {isLoading ? (
           <Text className="text-sm text-gray-600">Loading...</Text>

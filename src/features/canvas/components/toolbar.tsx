@@ -77,13 +77,10 @@ const TOOLS: { tool: Tool; icon: IconName; label: string }[] = [
   { tool: 'eraser', icon: 'auto-fix-normal', label: 'Eraser' },
 ];
 
-/** Icon to show for each pen style in the collapsed pill. */
-const TOOL_ICONS: Record<Tool, IconName> = {
-  pencil: 'edit',
-  fountain: 'create',
-  marker: 'highlight',
-  eraser: 'auto-fix-normal',
-};
+/** Icon for each tool — derived from TOOLS to avoid duplicate mapping. */
+const TOOL_ICONS: Record<Tool, IconName> = Object.fromEntries(
+  TOOLS.map(({ tool, icon }) => [tool, icon]),
+) as Record<Tool, IconName>;
 
 // ── Helpers ────────────────────────────────────────────────────
 
@@ -135,22 +132,25 @@ export function Toolbar({ onClose, onChange, onExpandedChange, onLayout }: Toolb
         // Only start drag if moved > 10px (avoids hijacking taps)
         return Math.abs(gestureState.dx) > 10 || Math.abs(gestureState.dy) > 10;
       },
-      onPanResponderGrant: () => {
-        positionRef.current = { ...position };
-      },
+      // positionRef always has the latest position (updated on release and
+      // on expand/collapse reset). No action needed on grant — dx/dy are
+      // relative deltas from the grant point, applied to positionRef.current
+      // in move and release handlers.
+      onPanResponderGrant: () => {},
       onPanResponderMove: (_evt, gestureState) => {
-        setPosition({
+        const newPos = {
           x: positionRef.current.x + gestureState.dx,
           y: positionRef.current.y + gestureState.dy,
-        });
+        };
+        setPosition(newPos);
       },
       onPanResponderRelease: (_evt, gestureState) => {
         const newPos = {
           x: positionRef.current.x + gestureState.dx,
           y: positionRef.current.y + gestureState.dy,
         };
-        setPosition(newPos);
         positionRef.current = newPos;
+        setPosition(newPos);
       },
     }),
   ).current;

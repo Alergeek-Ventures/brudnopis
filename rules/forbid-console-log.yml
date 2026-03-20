@@ -1,0 +1,20 @@
+id: forbid-console-log-ts
+message: "console.log is not allowed. Use console.info, console.warn, console.error, or a proper logging library instead"
+severity: error
+language: typescript
+rule:
+  pattern: console.log($$$)
+---
+id: forbid-console-log-tsx
+message: "console.log is not allowed. Use console.info, console.warn, console.error, or a proper logging library instead"
+severity: error
+language: tsx
+rule:
+  pattern: console.log($$$)
+---
+id: forbid-console-log-js
+message: "console.log is not allowed. Use console.info, console.warn, console.error, or a proper logging library instead"
+severity: error
+language: javascript
+rule:
+  pattern: console.log($$$)

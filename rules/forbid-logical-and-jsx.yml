@@ -1,0 +1,13 @@
+id: forbid-logical-and-jsx
+message: "Use ternary operator instead of logical AND with JSX: condition ? <Component /> : null"
+severity: error
+language: tsx
+rule:
+  pattern: $VAR && $JSX
+  has:
+    kind: jsx_element
+    stopBy: end
+fix: "$VAR ? $JSX : null"
+paths:
+  - "**/*.tsx"
+  - "**/*.jsx"

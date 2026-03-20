@@ -1,16 +1,16 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import type { TrashedDocument } from '../atoms';
+import type { TrashedDocument } from '../types/trashed-document';
 import { deleteDocument } from './storage';
 
 const TRASHED_DOCS_KEY = 'trashed_documents';
 
 /** 7 days in milliseconds. */
-const TRASH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+export const TRASH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 // ── AsyncStorage helpers ───────────────────────────────────────
 
-async function readTrashedDocs(): Promise<TrashedDocument[]> {
+export async function readTrashedDocs(): Promise<TrashedDocument[]> {
   const raw = await AsyncStorage.getItem(TRASHED_DOCS_KEY);
   if (!raw) return [];
   try {
@@ -57,8 +57,9 @@ export async function restoreDocument(uri: string): Promise<void> {
 export async function permanentlyDeleteDocument(uri: string): Promise<void> {
   try {
     await deleteDocument(uri);
-  } catch {
+  } catch (err) {
     // File may already be gone (e.g. user deleted via file manager).
+    console.error('Failed to delete document from disk:', uri, err);
   }
   const docs = await readTrashedDocs();
   await writeTrashedDocs(docs.filter((d) => d.uri !== uri));

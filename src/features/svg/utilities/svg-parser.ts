@@ -30,12 +30,10 @@ export type ParsedDocument = {
 export function parseSvgDocument(svg: string): ParsedDocument {
   const strokes: Stroke[] = [];
 
-  // Extract background pattern from root <svg> element
   const bgMatch = /data-background="([^"]*)"/.exec(svg);
   const backgroundPattern: BackgroundPattern =
     bgMatch && bgMatch[1] === 'dotted' ? bgMatch[1] : 'blank';
 
-  // Match all <path ... /> elements (self-closing)
   const pathRegex = /<path\s([^>]*?)\/>/g;
 
   for (let pathMatch = pathRegex.exec(svg); pathMatch !== null; pathMatch = pathRegex.exec(svg)) {
@@ -48,11 +46,9 @@ export function parseSvgDocument(svg: string): ParsedDocument {
     const points = decodePoints(dataPointsMatch[1]);
     if (points.length === 0) continue;
 
-    // Extract stroke color (default: #000000)
     const colorMatch = /\sstroke="([^"]*)"/.exec(attrs);
     const color = colorMatch ? colorMatch[1] : '#000000';
 
-    // Extract stroke width (default: 3)
     const widthMatch = /stroke-width="([^"]*)"/.exec(attrs);
     const width = widthMatch ? Number(widthMatch[1]) : 3;
 

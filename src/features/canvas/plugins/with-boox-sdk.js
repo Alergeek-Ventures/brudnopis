@@ -83,19 +83,16 @@ function withBooxDensityFix(config) {
       return config;
     }
 
-    // Add import
     contents = contents.replace(
       /^(import .+\n)(?!import)/m,
       '$1import com.facebook.react.uimanager.DisplayMetricsHolder\n',
     );
 
-    // Add fixScreenDisplayMetrics() call after super.onCreate(null)
     contents = contents.replace(
       /super\.onCreate\(null\)/,
       'super.onCreate(null)\n    fixScreenDisplayMetrics()',
     );
 
-    // Add the helper method before closing brace of the class
     contents = contents.replace(
       /(\n)(}\s*$)/m,
       `$1  /**

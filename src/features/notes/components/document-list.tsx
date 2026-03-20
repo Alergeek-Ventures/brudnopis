@@ -1,7 +1,7 @@
 import { LegendList } from '@legendapp/list/react-native';
 import { MaterialIcons } from '@react-native-vector-icons/material-icons';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { router } from 'expo-router';
+import { Redirect, router } from 'expo-router';
 import { useEffect, useMemo } from 'react';
 import { Alert, Pressable, Text, View } from 'react-native';
 import { Path, Svg } from 'react-native-svg';
@@ -20,6 +20,7 @@ import {
 } from '@/features/storage/utilities/trash';
 import { parseSvgDocument } from '@/features/svg/utilities/svg-parser';
 import { pointsToPathD } from '@/features/svg/utilities/svg-serializer';
+import { CANVAS_HEIGHT, CANVAS_WIDTH } from '@/types/canvas';
 
 function useDocumentList() {
   // Purge expired trash items on first mount (fire-and-forget).
@@ -46,19 +47,10 @@ function useDocumentList() {
     queryFn: getTrashedUris,
   });
 
-  // Redirect to folder picker when no folder is saved.
-  // Checked after query settles to avoid redirecting on initial load.
-  if (folderQuery.isSuccess && !folderUri) {
-    router.replace('/folder-picker');
-  }
-
-  // Redirect to folder picker when folder access fails (e.g. permission revoked).
-  if (documentsQuery.isError) {
-    clearSavedFolderUri();
-    router.replace('/folder-picker');
-  }
-
-  // Filter out trashed documents from the main list.
+  // Redirect flags — consumed by DocumentList to render <Redirect>.
+  // Avoids calling router.replace() during render (side effect).
+  const shouldRedirectNoFolder = folderQuery.isSuccess && !folderUri;
+  const shouldRedirectError = documentsQuery.isError;
   const trashedUris = trashedQuery.data;
   const documents = useMemo(() => {
     const allDocs = documentsQuery.data ?? [];
@@ -91,14 +83,13 @@ function useDocumentList() {
     documents,
     isLoading: folderQuery.isLoading || documentsQuery.isLoading,
     isRefetching: documentsQuery.isRefetching,
+    shouldRedirectNoFolder,
+    shouldRedirectError,
     handleNewDocument,
     handleTrashDocument,
   };
 }
 
-/** Canvas dimensions — must match DrawingCanvasView. */
-const CANVAS_WIDTH = 1872;
-const CANVAS_HEIGHT = 2404;
 const THUMBNAIL_ASPECT_RATIO = CANVAS_WIDTH / CANVAS_HEIGHT;
 
 function NoteThumbnail({ svgContent }: { svgContent: string }) {
@@ -167,9 +158,37 @@ function NoteCard({
   );
 }
 
+/**
+ * Clears stale folder URI before redirecting to folder picker.
+ * Violation: useEffect for AsyncStorage cleanup before redirect.
+ * Rationale: clearSavedFolderUri is an async side effect that must not
+ * run during render. The redirect itself is handled declaratively via <Redirect>.
+ */
+function RedirectAfterClear() {
+  useEffect(() => {
+    clearSavedFolderUri();
+  }, []);
+  return <Redirect href="/folder-picker" />;
+}
+
 export function DocumentList() {
-  const { documents, isLoading, isRefetching, handleNewDocument, handleTrashDocument } =
-    useDocumentList();
+  const {
+    documents,
+    isLoading,
+    isRefetching,
+    shouldRedirectNoFolder,
+    shouldRedirectError,
+    handleNewDocument,
+    handleTrashDocument,
+  } = useDocumentList();
+
+  if (shouldRedirectNoFolder) {
+    return <Redirect href="/folder-picker" />;
+  }
+
+  if (shouldRedirectError) {
+    return <RedirectAfterClear />;
+  }
 
   const handleOpenDocument = (doc: DocumentInfo) => {
     router.push({ pathname: '/canvas', params: { fileUri: doc.uri } });

@@ -23,11 +23,11 @@ export function FolderPicker() {
         <Text className="text-center text-base leading-6 text-gray-600">
           Documents are saved as SVG files.
         </Text>
-        {pickMutation.isError && (
+        {pickMutation.isError ? (
           <Text className="text-center text-sm text-red-700">
             Failed to pick folder. Please try again.
           </Text>
-        )}
+        ) : null}
         <Pressable
           onPress={() => pickMutation.mutate()}
           disabled={pickMutation.isPending}

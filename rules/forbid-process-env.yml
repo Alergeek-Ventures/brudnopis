@@ -1,0 +1,19 @@
+id: forbid-process-env-ts
+message: "Direct process.env access is not allowed. Import environment variables from @clinic/env package instead"
+severity: error
+language: typescript
+rule:
+  pattern: process.env
+ignores:
+  - "packages/env/**"
+  - "packages/app/tests/setup.ts"
+---
+id: forbid-process-env-tsx
+message: "Direct process.env access is not allowed. Import environment variables from @clinic/env package instead"
+severity: error
+language: tsx
+rule:
+  pattern: process.env
+ignores:
+  - "packages/env/**"
+  - "apps/next/components/next-tamagui-provider.tsx"

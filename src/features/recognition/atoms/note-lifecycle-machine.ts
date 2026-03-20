@@ -4,11 +4,13 @@ import { queryClientAtom } from 'jotai-tanstack-query';
 import { atomWithMachine } from 'jotai-xstate';
 import { fromPromise } from 'xstate';
 
-import { noteLifecycleMachine } from './machine';
+import { noteLifecycleMachine } from '../machines/lifecycle';
 
 // ── Debug inspector ────────────────────────────────────────────
+// DO NOT REMOVE — used to debug XState machines at runtime.
+// Uncomment `inspect: _debugInspector` in atomWithMachine below to enable.
 
-// biome-ignore lint/suspicious/noExplicitAny: debug-only inspector, removed before release
+// biome-ignore lint/suspicious/noExplicitAny: debug-only inspector
 function safeStringify(obj: any): string {
   try {
     return JSON.stringify(obj);
@@ -25,7 +27,7 @@ function safeStringify(obj: any): string {
   }
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: debug-only inspector, uncomment inspect in atomWithMachine to enable
+// biome-ignore lint/suspicious/noExplicitAny: debug-only inspector
 function _debugInspector(event: any) {
   // biome-ignore lint/suspicious/noExplicitAny: debug-only
   const id = (ref: any) => ref?.id ?? '?';
@@ -37,7 +39,6 @@ function _debugInspector(event: any) {
     case '@xstate.event': {
       const src = event.sourceRef ? id(event.sourceRef) : 'external';
       const ev = event.event;
-      // Log error details when present
       if (ev?.error instanceof Error) {
         console.debug(
           `[xstate:event] ${src} → ${id(event.actorRef)}: ${ev.type} ERROR: ${ev.error.message}\n${ev.error.stack}`,

@@ -8,13 +8,15 @@ import type {
 import { DrawingCanvasView as NativeDrawingCanvasView } from 'drawing-canvas';
 import { Redirect, useLocalSearchParams } from 'expo-router';
 import { useAtom, useAtomValue } from 'jotai';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, BackHandler, type LayoutChangeEvent, Text, View } from 'react-native';
 import { withUniwind } from 'uniwind';
 
-import { noteLifecycleMachineAtom } from '@/features/recognition/atoms';
-import { activeLanguageAtom } from '@/features/settings/atoms';
+import { noteLifecycleMachineAtom } from '@/features/recognition/atoms/note-lifecycle-machine';
+import { activeLanguageAtom } from '@/features/settings/atoms/active-language';
 import type { Stroke, StrokeStyle } from '@/features/svg/types';
+
+import { CANVAS_HEIGHT, CANVAS_WIDTH } from '@/types/canvas';
 
 import { Toolbar, type ToolbarState } from './toolbar';
 
@@ -26,9 +28,6 @@ const DrawingCanvasView = withUniwind(NativeDrawingCanvasView, {
   style: { fromClassName: 'className' },
 });
 
-// Default canvas dimensions — matches typical Boox screen.
-const CANVAS_WIDTH = 1872;
-const CANVAS_HEIGHT = 2404;
 const BACKGROUND_PATTERN = 'dotted' as const;
 
 export function Canvas() {
@@ -67,17 +66,18 @@ function CanvasContent({
   const toolbarStateRef = useRef(toolbarState);
   toolbarStateRef.current = toolbarState;
 
-  // Block hardware back button while canvas is open.
-  // Subscribes once on first render. The subscription is cleaned up by the
-  // CLOSE_NOTE flow which navigates away (unmounting this component).
-  const backHandlerSetUp = useRef(false);
-  if (!backHandlerSetUp.current) {
-    backHandlerSetUp.current = true;
-    BackHandler.addEventListener('hardwareBackPress', () => true);
-  }
+  // Violation: useEffect for BackHandler subscription lifecycle.
+  // Rationale: BackHandler requires addEventListener/remove pairing — no
+  // declarative alternative exists in React Native.
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => true);
+    return () => subscription.remove();
+  }, []);
 
-  // Send OPEN_NOTE synchronously during render (not in an effect).
-  // The machine is idempotent for same fileUri/folderUri — safe to call on re-renders.
+  // Violation: Render-time side effect — sends OPEN_NOTE to XState during render.
+  // Rationale: The machine is idempotent for same fileUri/folderUri. Sending during
+  // render avoids a useEffect and ensures the machine is in the correct state before
+  // the first paint. Acceptable because XState dispatch is synchronous and pure.
   const noteId = fileUri ?? folderUri;
   const openedRef = useRef<string | null>(null);
   if (openedRef.current !== noteId) {
@@ -160,7 +160,6 @@ function CanvasContent({
     [send],
   );
 
-  // Pass pen settings to the native canvas.
   const penType = toolbarState.tool === 'eraser' ? undefined : toolbarState.strokeStyle;
   const strokeColor = toolbarState.tool === 'eraser' ? undefined : toolbarState.strokeColor;
   const strokeWidth = toolbarState.tool === 'eraser' ? undefined : toolbarState.strokeWidth;

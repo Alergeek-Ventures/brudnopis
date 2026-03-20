@@ -180,6 +180,10 @@ export const noteMachine = setup({
     isCanvasReady: ({ context }) => context.canvasReady,
   },
   actions: {
+    // Violation: Imperative ref mutations bypass XState's assign semantics.
+    // Rationale: strokesRef mutates on every stylus stroke-end. Using assign
+    // would trigger snapshot updates and React re-renders for data that is
+    // only consumed during serialization (save). Refs keep drawing fast.
     addStroke: ({ context, event }) => {
       if (event.type !== 'STROKE_END') return;
       const points = decodePoints(event.points);
@@ -191,6 +195,7 @@ export const noteMachine = setup({
         ...(event.style && event.style !== 'pencil' && { style: event.style }),
       });
     },
+    // Violation: Same as addStroke — imperative ref mutation for performance.
     eraseStrokes: ({ context, event }) => {
       if (event.type !== 'ERASE_END') return;
       const indicesToRemove = new Set(event.indices);

@@ -2,24 +2,13 @@ import { MaterialIcons } from '@react-native-vector-icons/material-icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
 
-import type { TrashedDocument } from '../atoms';
-import { permanentlyDeleteDocument, restoreDocument } from '../utilities/trash';
-
-const TRASH_KEY = 'trashed_documents';
-
-/** 7 days in milliseconds. */
-const TRASH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-
-async function readTrashedDocs(): Promise<TrashedDocument[]> {
-  const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
-  const raw = await AsyncStorage.getItem(TRASH_KEY);
-  if (!raw) return [];
-  try {
-    return JSON.parse(raw) as TrashedDocument[];
-  } catch {
-    return [];
-  }
-}
+import type { TrashedDocument } from '../types/trashed-document';
+import {
+  permanentlyDeleteDocument,
+  readTrashedDocs,
+  restoreDocument,
+  TRASH_TTL_MS,
+} from '../utilities/trash';
 
 function formatDaysRemaining(deletedAt: number): string {
   const elapsed = Date.now() - deletedAt;

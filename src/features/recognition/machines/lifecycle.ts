@@ -8,7 +8,7 @@ import type { BackgroundPattern, Stroke, StrokeStyle } from '@/features/svg/type
 import { insertMetadata } from '@/features/svg/utilities/metadata';
 import { parseSvgDocument } from '@/features/svg/utilities/svg-parser';
 
-import { noteMachine } from './note-machine';
+import { noteMachine } from './note';
 
 // ── SVG → ML Kit conversion ───────────────────────────────────
 
@@ -113,6 +113,21 @@ export const noteLifecycleMachine = setup({
   actions: {
     /** Provided at runtime: invalidate React Query document list cache. */
     onRecognitionComplete: () => {},
+    assignCurrentNote: assign({
+      current: ({ event }) => {
+        if (event.type !== 'OPEN_NOTE') return null;
+        return {
+          fileUri: event.fileUri,
+          folderUri: event.folderUri,
+          lang: event.lang,
+          width: event.width,
+          height: event.height,
+          backgroundPattern: event.backgroundPattern,
+          strokesRef: event.strokesRef,
+          canvasRef: event.canvasRef,
+        };
+      },
+    }),
     recordError: assign({
       results: ({ context }, params: { error: string }) => {
         const results = new Map(context.results);
@@ -151,18 +166,7 @@ export const noteLifecycleMachine = setup({
       on: {
         OPEN_NOTE: {
           target: 'editing',
-          actions: assign({
-            current: ({ event }) => ({
-              fileUri: event.fileUri,
-              folderUri: event.folderUri,
-              lang: event.lang,
-              width: event.width,
-              height: event.height,
-              backgroundPattern: event.backgroundPattern,
-              strokesRef: event.strokesRef,
-              canvasRef: event.canvasRef,
-            }),
-          }),
+          actions: 'assignCurrentNote',
         },
       },
     },
@@ -231,18 +235,7 @@ export const noteLifecycleMachine = setup({
         OPEN_NOTE: {
           target: 'editing',
           reenter: true,
-          actions: assign({
-            current: ({ event }) => ({
-              fileUri: event.fileUri,
-              folderUri: event.folderUri,
-              lang: event.lang,
-              width: event.width,
-              height: event.height,
-              backgroundPattern: event.backgroundPattern,
-              strokesRef: event.strokesRef,
-              canvasRef: event.canvasRef,
-            }),
-          }),
+          actions: 'assignCurrentNote',
         },
       },
     },

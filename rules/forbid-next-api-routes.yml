@@ -1,0 +1,14 @@
+id: forbid-next-api-routes
+message: API routes are not allowed (use Hono instead)
+severity: error
+language: typescript
+rule:
+  any:
+    - pattern: export async function GET($$$) { $$$ }
+    - pattern: export async function POST($$$) { $$$ }
+    - pattern: export async function PUT($$$) { $$$ }
+    - pattern: export async function DELETE($$$) { $$$ }
+    - pattern: export async function PATCH($$$) { $$$ }
+paths:
+  - "apps/next/app/api/**.ts"
+  - "apps/next/app/api/**.tsx"

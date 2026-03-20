@@ -6,7 +6,6 @@ export function extractMetadataText(svg: string): string | undefined {
   const match = /<metadata>([\s\S]*?)<\/metadata>/.exec(svg);
   if (!match) return undefined;
 
-  // Unescape XML entities
   return (
     match[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').trim() || undefined
   );

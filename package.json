@@ -6,9 +6,9 @@
     "start": "expo start",
     "prebuild": "npx expo prebuild --clean -p android",
     "android": "expo run:android",
-    "lint": "biome check .",
-    "lint:fix": "biome check --fix .",
-    "format": "biome format --write .",
+    "lint": "pnpm lint:ast-grep && biome check .",
+    "lint:fix": "pnpm lint:ast-grep --update-all && biome check --fix --unsafe .",
+    "lint:ast-grep": "ast-grep scan",
     "test": "vitest"
   },
   "dependencies": {
@@ -43,6 +43,7 @@
     "xstate": "^5.28.0"
   },
   "devDependencies": {
+    "@ast-grep/cli": "^0.42.0",
     "@biomejs/biome": "2.4.7",
     "@types/react": "~19.2.10",
     "typescript": "~5.9.2",
@@ -51,7 +52,10 @@
   "pnpm": {
     "overrides": {
       "react-dom": "19.2.0"
-    }
+    },
+    "onlyBuiltDependencies": [
+      "@ast-grep/cli"
+    ]
   },
   "expo": {
     "autolinking": {
