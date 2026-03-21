@@ -1,14 +1,9 @@
 import { MaterialIcons } from '@react-native-vector-icons/material-icons';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 
 import type { TrashedDocument } from '../types/trashed-document';
-import {
-  permanentlyDeleteDocument,
-  readTrashedDocs,
-  restoreDocument,
-  TRASH_TTL_MS,
-} from '../utilities/trash';
+import { emptyTrash, readTrashedDocs, restoreDocument, TRASH_TTL_MS } from '../utilities/trash';
 
 function formatDaysRemaining(deletedAt: number): string {
   const elapsed = Date.now() - deletedAt;
@@ -23,22 +18,7 @@ function formatDeletedDate(deletedAt: number): string {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function TrashedItem({
-  item,
-  onRestore,
-  onDelete,
-}: {
-  item: TrashedDocument;
-  onRestore: () => void;
-  onDelete: () => void;
-}) {
-  const handleDelete = () => {
-    Alert.alert('Delete Permanently?', 'This note will be permanently deleted.', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: onDelete },
-    ]);
-  };
-
+function TrashedItem({ item, onRestore }: { item: TrashedDocument; onRestore: () => void }) {
   return (
     <View className="flex-row items-center justify-between border-b border-gray-300 px-6 py-4">
       <View className="flex-1 pr-4">
@@ -49,52 +29,44 @@ function TrashedItem({
           Deleted {formatDeletedDate(item.deletedAt)} · {formatDaysRemaining(item.deletedAt)}
         </Text>
       </View>
-      <View className="flex-row items-center gap-3">
-        <Pressable
-          onPress={onRestore}
-          className="rounded-lg border border-gray-400 bg-gray-200 px-4 py-2.5 active:bg-gray-300"
-        >
-          <MaterialIcons name="restore" size={18} color="black" />
-        </Pressable>
-        <Pressable
-          onPress={handleDelete}
-          className="rounded-lg border border-red-800 bg-red-700 px-4 py-2.5 active:bg-red-900"
-        >
-          <MaterialIcons name="delete-forever" size={18} color="white" />
-        </Pressable>
-      </View>
+      <Pressable
+        onPress={onRestore}
+        className="rounded-lg border border-gray-400 bg-gray-200 px-4 py-2.5 active:bg-gray-300"
+      >
+        <MaterialIcons name="restore" size={18} color="black" />
+      </Pressable>
     </View>
   );
 }
 
 export function Trash() {
-  const queryClient = useQueryClient();
-
   const trashedQuery = useQuery({
     queryKey: ['trashedDocuments'],
     queryFn: readTrashedDocs,
   });
 
   const restoreMutation = useMutation({
-    mutationFn: (uri: string) => restoreDocument(uri),
-    onSuccess: () => {
-      queryClient.invalidateQueries();
-    },
+    mutationFn: (doc: { uri: string; filename: string }) => restoreDocument(doc.uri, doc.filename),
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: (uri: string) => permanentlyDeleteDocument(uri),
-    onSuccess: () => {
-      queryClient.invalidateQueries();
-    },
+  const emptyTrashMutation = useMutation({
+    mutationFn: emptyTrash,
   });
 
   const items = trashedQuery.data ?? [];
 
   return (
     <View className="flex-1 pt-safe px-safe">
-      <View className="border-b border-gray-300 px-6 pb-4 pt-2">
+      <View className="flex-row items-center justify-between border-b border-gray-300 px-6 pb-4 pt-2">
         <Text className="text-2xl font-bold text-black">Trash</Text>
+        {items.length > 0 ? (
+          <Pressable
+            onPress={() => emptyTrashMutation.mutate()}
+            className="rounded-lg border border-red-800 bg-red-700 px-4 py-2.5 active:bg-red-900"
+          >
+            <Text className="text-sm font-medium text-white">Empty Trash</Text>
+          </Pressable>
+        ) : null}
       </View>
 
       {items.length === 0 ? (
@@ -109,8 +81,7 @@ export function Trash() {
             <TrashedItem
               key={item.uri}
               item={item}
-              onRestore={() => restoreMutation.mutate(item.uri)}
-              onDelete={() => deleteMutation.mutate(item.uri)}
+              onRestore={() => restoreMutation.mutate({ uri: item.uri, filename: item.filename })}
             />
           ))}
         </ScrollView>

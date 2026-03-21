@@ -178,3 +178,94 @@ export async function loadDocument(fileUri: string): Promise<string> {
   const encoded = ensureSafUriEncoded(fileUri);
   return readAsStringAsync(encoded);
 }
+
+// ── .trash folder operations ───────────────────────────────────
+
+const TRASH_FOLDER_NAME = '.trash';
+
+/**
+ * Get or create the .trash subfolder inside the given parent folder.
+ * Returns the SAF URI of the .trash directory.
+ */
+async function getOrCreateTrashFolder(parentFolderUri: string): Promise<string> {
+  const encoded = ensureSafUriEncoded(parentFolderUri);
+
+  // Check if .trash already exists by listing directory contents.
+  const entries = await StorageAccessFramework.readDirectoryAsync(encoded);
+  const existing = entries.find((uri) => {
+    const decoded = decodeURIComponent(uri);
+    return decoded.endsWith(TRASH_FOLDER_NAME);
+  });
+  if (existing) return existing;
+
+  return StorageAccessFramework.makeDirectoryAsync(encoded, TRASH_FOLDER_NAME);
+}
+
+/**
+ * Move a document to the .trash subfolder.
+ * Reads content → creates file in .trash → writes content → deletes original.
+ * Returns the new SAF URI in the .trash folder.
+ */
+export async function moveDocumentToTrash(
+  folderUri: string,
+  fileUri: string,
+  filename: string,
+): Promise<string> {
+  const trashUri = await getOrCreateTrashFolder(folderUri);
+  const content = await readAsStringAsync(ensureSafUriEncoded(fileUri));
+  const newUri = await StorageAccessFramework.createFileAsync(
+    ensureSafUriEncoded(trashUri),
+    filename,
+    'image/svg+xml',
+  );
+  await writeAsStringAsync(ensureSafUriEncoded(newUri), content);
+  await deleteDocument(fileUri);
+  return newUri;
+}
+
+/**
+ * Restore a document from .trash back to the parent folder.
+ * Reads content → creates file in parent → writes content → deletes from .trash.
+ * Returns the new SAF URI in the parent folder.
+ */
+export async function moveDocumentFromTrash(
+  folderUri: string,
+  trashFileUri: string,
+  filename: string,
+): Promise<string> {
+  const content = await readAsStringAsync(ensureSafUriEncoded(trashFileUri));
+  const newUri = await StorageAccessFramework.createFileAsync(
+    ensureSafUriEncoded(folderUri),
+    filename,
+    'image/svg+xml',
+  );
+  await writeAsStringAsync(ensureSafUriEncoded(newUri), content);
+  await deleteDocument(trashFileUri);
+  return newUri;
+}
+
+/**
+ * List all .svg files in the .trash subfolder.
+ */
+export async function listTrashFiles(folderUri: string): Promise<string[]> {
+  const encoded = ensureSafUriEncoded(folderUri);
+  const entries = await StorageAccessFramework.readDirectoryAsync(encoded);
+  const trashEntry = entries.find((uri) => {
+    const decoded = decodeURIComponent(uri);
+    return decoded.endsWith(TRASH_FOLDER_NAME);
+  });
+  if (!trashEntry) return [];
+
+  const trashFiles = await StorageAccessFramework.readDirectoryAsync(
+    ensureSafUriEncoded(trashEntry),
+  );
+  return trashFiles.filter((uri) => extractFilename(uri).endsWith('.svg'));
+}
+
+/**
+ * Delete all files inside the .trash subfolder.
+ */
+export async function emptyTrashFolder(folderUri: string): Promise<void> {
+  const files = await listTrashFiles(folderUri);
+  await Promise.allSettled(files.map((uri) => deleteDocument(uri)));
+}

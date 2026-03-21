@@ -3,7 +3,7 @@ import { MaterialIcons } from '@react-native-vector-icons/material-icons';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Redirect, router } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { Path, Svg } from 'react-native-svg';
 
 import type { DocumentInfo } from '@/features/storage/types';
@@ -13,11 +13,7 @@ import {
   getSavedFolderUri,
   listDocuments,
 } from '@/features/storage/utilities/storage';
-import {
-  getTrashedUris,
-  purgeExpiredTrash,
-  trashDocument,
-} from '@/features/storage/utilities/trash';
+import { purgeExpiredTrash, trashDocument } from '@/features/storage/utilities/trash';
 import { parseSvgDocument } from '@/features/svg/utilities/svg-parser';
 import { pointsToPathD } from '@/features/svg/utilities/svg-serializer';
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from '@/types/canvas';
@@ -42,25 +38,18 @@ function useDocumentList() {
     enabled: !!folderUri,
   });
 
-  const trashedQuery = useQuery({
-    queryKey: ['trashedUris'],
-    queryFn: getTrashedUris,
-  });
-
   // Redirect flags — consumed by DocumentList to render <Redirect>.
   // Avoids calling router.replace() during render (side effect).
   const shouldRedirectNoFolder = folderQuery.isSuccess && !folderUri;
   const shouldRedirectError = documentsQuery.isError;
-  const trashedUris = trashedQuery.data;
-  const documents = useMemo(() => {
-    const allDocs = documentsQuery.data ?? [];
-    if (!trashedUris || trashedUris.size === 0) return allDocs;
-    return allDocs.filter((doc) => !trashedUris.has(doc.uri));
-  }, [documentsQuery.data, trashedUris]);
+  const documents = documentsQuery.data ?? [];
 
   const trashMutation = useMutation({
-    mutationFn: (docs: { uri: string; filename: string }[]) =>
-      Promise.all(docs.map((d) => trashDocument(d.uri, d.filename))),
+    mutationFn: async (docs: { uri: string; filename: string }[]) => {
+      for (const d of docs) {
+        await trashDocument(d.uri, d.filename);
+      }
+    },
   });
 
   const handleNewDocument = () => {
@@ -68,33 +57,12 @@ function useDocumentList() {
     router.push({ pathname: '/canvas', params: { folderUri } });
   };
 
-  /**
-   * Trash multiple documents at once. Shows a confirmation Alert,
-   * then calls trashDocument for each selected note.
-   */
   const handleTrashDocuments = (docs: DocumentInfo[], onComplete?: () => void) => {
-    const count = docs.length;
-    if (count === 0) return;
-
-    const title = count === 1 ? 'Move to Trash?' : `Move ${count} notes to Trash?`;
-    const message =
-      count === 1
-        ? 'This note will be permanently deleted after 7 days.'
-        : `These ${count} notes will be permanently deleted after 7 days.`;
-
-    Alert.alert(title, message, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Move to Trash',
-        style: 'destructive',
-        onPress: () => {
-          trashMutation.mutate(
-            docs.map((d) => ({ uri: d.uri, filename: d.filename })),
-            { onSuccess: onComplete },
-          );
-        },
-      },
-    ]);
+    if (docs.length === 0) return;
+    trashMutation.mutate(
+      docs.map((d) => ({ uri: d.uri, filename: d.filename })),
+      { onSuccess: onComplete },
+    );
   };
 
   return {
@@ -357,6 +325,7 @@ export function DocumentList() {
           keyExtractor={(item) => item.uri}
           renderItem={renderItem}
           recycleItems
+          extraData={selectedUris}
           numColumns={4}
           columnWrapperStyle={{ gap: 8 }}
           contentContainerStyle={{ padding: 12 }}

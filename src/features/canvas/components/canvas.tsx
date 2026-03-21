@@ -11,6 +11,7 @@ import { useAtom, useAtomValue } from 'jotai';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   BackHandler,
   type LayoutChangeEvent,
   Pressable,
@@ -58,12 +59,22 @@ function CanvasContent({
   const canvasRef = useRef<DrawingCanvasRef>(null);
   const strokesRef = useRef<Stroke[]>([]);
   const activeLanguage = useAtomValue(activeLanguageAtom);
-  const [, send] = useAtom(noteLifecycleMachineAtom);
+  const [snapshot, send] = useAtom(noteLifecycleMachineAtom);
 
-  // Show a loading overlay while the note is closing (closingDirty → flushing
-  // → stopping → navigating). Set locally on close press — once you tap close
-  // there's no going back, so a simple flag is sufficient.
-  const [isClosing, setIsClosing] = useState(false);
+  // Show "Saving…" overlay once the note is closing. Derived from machine
+  // state: navigating (after note closed) or the child noteEditor is past
+  // the editing sub-states (closingDirty / flushing / stopping).
+  const noteEditor = snapshot.children.noteEditor;
+  // biome-ignore lint/suspicious/noExplicitAny: XState child snapshot union lacks .value on non-machine types
+  const childState = (noteEditor?.getSnapshot?.() as any)?.value;
+  const isClosing =
+    snapshot.matches('navigating') ||
+    (snapshot.matches('editing') &&
+      typeof childState === 'string' &&
+      (childState === 'closingDirty' ||
+        childState === 'flushing' ||
+        childState === 'stopping' ||
+        childState === 'closed'));
 
   // Pen settings — the toolbar owns writes; canvas derives native props.
   const persisted = useAtomValue(penSettingsAtom);
@@ -79,9 +90,28 @@ function CanvasContent({
   // Rationale: BackHandler requires addEventListener/remove pairing — no
   // declarative alternative exists in React Native.
   useEffect(() => {
-    const subscription = BackHandler.addEventListener('hardwareBackPress', () => true);
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      send({ type: 'CLOSE_NOTE' });
+      return true;
+    });
     return () => subscription.remove();
-  }, []);
+  }, [send]);
+
+  // Restore canvas content after returning from background (notification,
+  // app switch, etc.). The Onyx SDK raw drawing surface loses its rendered
+  // bitmap when Android's compositor takes over. The XState machine
+  // orchestrates pausing on background and re-rendering from strokesRef
+  // on foreground — no disk read needed.
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'background') {
+        send({ type: 'APP_BACKGROUND' });
+      } else if (state === 'active') {
+        send({ type: 'APP_FOREGROUND' });
+      }
+    });
+    return () => subscription.remove();
+  }, [send]);
 
   // Violation: Render-time side effect — sends OPEN_NOTE to XState during render.
   // Rationale: The machine is idempotent for same fileUri/folderUri. Sending during
@@ -128,7 +158,6 @@ function CanvasContent({
   };
 
   const handleClose = () => {
-    setIsClosing(true);
     send({ type: 'CLOSE_NOTE' });
   };
 

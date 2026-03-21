@@ -93,7 +93,9 @@ export const noteLifecycleMachine = setup({
       | { type: 'CANVAS_READY' }
       | { type: 'CLOSE_NOTE' }
       | { type: 'TOOLBAR_EXPANDED' }
-      | { type: 'TOOLBAR_COLLAPSED' },
+      | { type: 'TOOLBAR_COLLAPSED' }
+      | { type: 'APP_BACKGROUND' }
+      | { type: 'APP_FOREGROUND' },
   },
   actors: {
     noteMachine,
@@ -230,6 +232,12 @@ export const noteLifecycleMachine = setup({
         },
         TOOLBAR_COLLAPSED: {
           actions: sendTo('noteEditor', { type: 'TOOLBAR_COLLAPSED' }),
+        },
+        APP_BACKGROUND: {
+          actions: sendTo('noteEditor', { type: 'APP_BACKGROUND' }),
+        },
+        APP_FOREGROUND: {
+          actions: sendTo('noteEditor', { type: 'APP_FOREGROUND' }),
         },
         // Allow re-opening a different note (stops current child automatically)
         OPEN_NOTE: {
