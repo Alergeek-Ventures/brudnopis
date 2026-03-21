@@ -110,6 +110,9 @@ const serializeAndSave = fromPromise(
       backgroundPattern: BackgroundPattern;
     };
   }): Promise<{ fileUri: string }> => {
+    console.debug(
+      `[note:serializeAndSave] strokes=${input.strokesRef.current.length} fileUri=${input.fileUri ?? '(new)'}`,
+    );
     const svg = serializeSvgDocument(
       input.strokesRef.current,
       input.width,
@@ -143,21 +146,17 @@ const serializeAndSave = fromPromise(
  * Only after both complete does the machine transition to the final
  * `closed` state, which triggers navigation away.
  */
-const stopAndRefresh = fromPromise(
-  async ({
-    input,
-  }: {
-    input: {
-      canvasRef: MutableRefObject<DrawingCanvasRef | null>;
-    };
-  }) => {
-    const canvas = input.canvasRef.current;
-    if (canvas) {
-      await canvas.stopDrawing();
-    }
-    await refreshScreen();
-  },
-);
+/**
+ * Trigger a full e-ink refresh to clear ghosting from the drawing session.
+ *
+ * Raw drawing is already stopped by the `stopDrawing` entry action on
+ * `closingDirty` / `stopping`, so we only need the GC waveform refresh here.
+ */
+const einkRefresh = fromPromise(async () => {
+  console.debug('[note:einkRefresh] refreshing screen');
+  await refreshScreen();
+  console.debug('[note:einkRefresh] refreshScreen complete');
+});
 
 // ── Machine ────────────────────────────────────────────────────
 
@@ -178,7 +177,7 @@ export const noteMachine = setup({
     loadDoc,
     restoreAndStart,
     serializeAndSave,
-    stopAndRefresh,
+    einkRefresh,
   },
   guards: {
     isCanvasReady: ({ context }) => context.canvasReady,
@@ -198,13 +197,20 @@ export const noteMachine = setup({
         width: event.width,
         ...(event.style && event.style !== 'pencil' && { style: event.style }),
       });
+      console.debug(
+        `[note:addStroke] +1 stroke (${points.length} pts), total=${context.strokesRef.current.length}`,
+      );
     },
     // Violation: Same as addStroke — imperative ref mutation for performance.
     eraseStrokes: ({ context, event }) => {
       if (event.type !== 'ERASE_END') return;
       const indicesToRemove = new Set(event.indices);
+      const before = context.strokesRef.current.length;
       context.strokesRef.current = context.strokesRef.current.filter(
         (_, i) => !indicesToRemove.has(i),
+      );
+      console.debug(
+        `[note:eraseStrokes] removed=${before - context.strokesRef.current.length}, total=${context.strokesRef.current.length}`,
       );
     },
     pauseDrawing: ({ context }) => {
@@ -212,6 +218,12 @@ export const noteMachine = setup({
     },
     resumeDrawing: ({ context }) => {
       context.canvasRef.current?.resumeDrawing();
+    },
+    // Permanently close raw drawing and unfreeze the e-ink screen so
+    // React Native UI updates (e.g. "Saving…" overlay) become visible.
+    stopDrawing: ({ context }) => {
+      console.debug('[note:stopDrawing] unfreezing screen for close overlay');
+      context.canvasRef.current?.stopDrawing();
     },
   },
 }).createMachine({
@@ -361,7 +373,7 @@ export const noteMachine = setup({
               actions: 'eraseStrokes',
             },
             CLOSE: {
-              target: '#note.flushing',
+              target: '#note.closingDirty',
             },
           },
           after: {
@@ -374,6 +386,19 @@ export const noteMachine = setup({
     },
 
     saving: {
+      on: {
+        // Strokes arriving mid-save cancel the in-flight save (exiting
+        // the state stops the invoke) and go back to dirty, where the
+        // debounce timer re-saves with the complete stroke set.
+        STROKE_END: {
+          target: 'editing.dirty',
+          actions: 'addStroke',
+        },
+        ERASE_END: {
+          target: 'editing.dirty',
+          actions: 'eraseStrokes',
+        },
+      },
       invoke: {
         src: 'serializeAndSave',
         input: ({ context }) => ({
@@ -392,6 +417,31 @@ export const noteMachine = setup({
         },
         onError: {
           target: 'editing.dirty',
+        },
+      },
+    },
+
+    // Wait for late-arriving strokes before flushing to disk.
+    // Each stroke resets the timer. After 1s of silence, flush.
+    // Entry stops raw drawing so the e-ink screen unfreezes and the
+    // "Saving…" overlay becomes visible immediately.
+    closingDirty: {
+      entry: 'stopDrawing',
+      on: {
+        STROKE_END: {
+          target: 'closingDirty',
+          reenter: true,
+          actions: 'addStroke',
+        },
+        ERASE_END: {
+          target: 'closingDirty',
+          reenter: true,
+          actions: 'eraseStrokes',
+        },
+      },
+      after: {
+        [SAVE_DEBOUNCE_MS]: {
+          target: 'flushing',
         },
       },
     },
@@ -423,12 +473,12 @@ export const noteMachine = setup({
     // Phase 3: Close raw drawing and refresh the e-ink display.
     // Runs AFTER saving so the SVG is on disk, and BEFORE the final
     // state so navigation only happens once the screen has settled.
+    // Entry stops raw drawing (idempotent) so the "Saving…" overlay
+    // is visible on clean-close paths that skip closingDirty.
     stopping: {
+      entry: 'stopDrawing',
       invoke: {
-        src: 'stopAndRefresh',
-        input: ({ context }) => ({
-          canvasRef: context.canvasRef,
-        }),
+        src: 'einkRefresh',
         onDone: {
           target: 'closed',
         },

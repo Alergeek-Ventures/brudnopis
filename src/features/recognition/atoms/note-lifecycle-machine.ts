@@ -82,7 +82,7 @@ export const noteLifecycleMachineAtom = atomWithMachine(
   (get: Getter) => {
     const queryClient = get(queryClientAtom);
     return {
-      // inspect: debugInspector,
+      inspect: _debugInspector,
       actors: {
         /**
          * Refetch the document list (reads all SVGs from disk) and navigate

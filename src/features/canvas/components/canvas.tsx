@@ -58,10 +58,12 @@ function CanvasContent({
   const canvasRef = useRef<DrawingCanvasRef>(null);
   const strokesRef = useRef<Stroke[]>([]);
   const activeLanguage = useAtomValue(activeLanguageAtom);
-  const [snapshot, send] = useAtom(noteLifecycleMachineAtom);
+  const [, send] = useAtom(noteLifecycleMachineAtom);
 
-  // Show a loading overlay while the machine saves + refetches thumbnails.
-  const isSaving = snapshot.matches('navigating');
+  // Show a loading overlay while the note is closing (closingDirty → flushing
+  // → stopping → navigating). Set locally on close press — once you tap close
+  // there's no going back, so a simple flag is sufficient.
+  const [isClosing, setIsClosing] = useState(false);
 
   // Pen settings — the toolbar owns writes; canvas derives native props.
   const persisted = useAtomValue(penSettingsAtom);
@@ -126,6 +128,7 @@ function CanvasContent({
   };
 
   const handleClose = () => {
+    setIsClosing(true);
     send({ type: 'CLOSE_NOTE' });
   };
 
@@ -181,7 +184,7 @@ function CanvasContent({
       />
       {/* Toolbar renders after canvas so it sits on top in Android's
           native view hierarchy. SurfaceView ignores CSS z-index. */}
-      {isSaving ? (
+      {isClosing ? (
         <View className="absolute inset-0 items-center justify-center bg-white/80">
           <ActivityIndicator size="large" color="#333" />
           <Text className="mt-3 text-base text-gray-600">Saving…</Text>
