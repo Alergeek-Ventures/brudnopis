@@ -2,7 +2,7 @@ import { LegendList } from '@legendapp/list/react-native';
 import { MaterialIcons } from '@react-native-vector-icons/material-icons';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Redirect, router } from 'expo-router';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, Text, View } from 'react-native';
 import { Path, Svg } from 'react-native-svg';
 
@@ -59,8 +59,8 @@ function useDocumentList() {
   }, [documentsQuery.data, trashedUris]);
 
   const trashMutation = useMutation({
-    mutationFn: ({ uri, filename }: { uri: string; filename: string }) =>
-      trashDocument(uri, filename),
+    mutationFn: (docs: { uri: string; filename: string }[]) =>
+      Promise.all(docs.map((d) => trashDocument(d.uri, d.filename))),
   });
 
   const handleNewDocument = () => {
@@ -68,13 +68,31 @@ function useDocumentList() {
     router.push({ pathname: '/canvas', params: { folderUri } });
   };
 
-  const handleTrashDocument = (doc: DocumentInfo) => {
-    Alert.alert('Move to Trash?', 'This note will be permanently deleted after 7 days.', [
+  /**
+   * Trash multiple documents at once. Shows a confirmation Alert,
+   * then calls trashDocument for each selected note.
+   */
+  const handleTrashDocuments = (docs: DocumentInfo[], onComplete?: () => void) => {
+    const count = docs.length;
+    if (count === 0) return;
+
+    const title = count === 1 ? 'Move to Trash?' : `Move ${count} notes to Trash?`;
+    const message =
+      count === 1
+        ? 'This note will be permanently deleted after 7 days.'
+        : `These ${count} notes will be permanently deleted after 7 days.`;
+
+    Alert.alert(title, message, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Move to Trash',
         style: 'destructive',
-        onPress: () => trashMutation.mutate({ uri: doc.uri, filename: doc.filename }),
+        onPress: () => {
+          trashMutation.mutate(
+            docs.map((d) => ({ uri: d.uri, filename: d.filename })),
+            { onSuccess: onComplete },
+          );
+        },
       },
     ]);
   };
@@ -86,7 +104,7 @@ function useDocumentList() {
     shouldRedirectNoFolder,
     shouldRedirectError,
     handleNewDocument,
-    handleTrashDocument,
+    handleTrashDocuments,
   };
 }
 
@@ -115,6 +133,7 @@ function NoteThumbnail({ svgContent }: { svgContent: string }) {
           strokeLinecap="round"
           strokeLinejoin="round"
           fill="none"
+          opacity={stroke.style === 'marker' ? 0.3 : 1}
         />
       ))}
     </Svg>
@@ -124,17 +143,23 @@ function NoteThumbnail({ svgContent }: { svgContent: string }) {
 function NoteCard({
   item,
   loading,
+  selected,
   onPress,
   onLongPress,
 }: {
   item: DocumentInfo;
   loading?: boolean;
+  selected?: boolean;
   onPress: () => void;
   onLongPress: () => void;
 }) {
   return (
     <Pressable onPress={onPress} onLongPress={onLongPress} className="flex-1">
-      <View className="overflow-hidden rounded-lg border border-gray-300 bg-white">
+      <View
+        className={`overflow-hidden rounded-lg border ${
+          selected ? 'border-sky-700 bg-sky-50' : 'border-gray-300 bg-white'
+        }`}
+      >
         <View style={{ aspectRatio: THUMBNAIL_ASPECT_RATIO }}>
           {loading ? (
             <View className="flex-1 items-center justify-center bg-gray-100">
@@ -147,6 +172,18 @@ function NoteCard({
               <Text className="text-sm text-gray-600">Empty</Text>
             </View>
           )}
+          {/* Selection checkbox overlay */}
+          {selected != null ? (
+            <View className="absolute left-1.5 top-1.5">
+              <View
+                className={`h-6 w-6 items-center justify-center rounded-full border-2 ${
+                  selected ? 'border-sky-700 bg-sky-700' : 'border-gray-400 bg-white'
+                }`}
+              >
+                {selected ? <MaterialIcons name="check" size={14} color="white" /> : null}
+              </View>
+            </View>
+          ) : null}
         </View>
       </View>
       <View className="px-0.5 pt-1 pb-0.5">
@@ -179,8 +216,35 @@ export function DocumentList() {
     shouldRedirectNoFolder,
     shouldRedirectError,
     handleNewDocument,
-    handleTrashDocument,
+    handleTrashDocuments,
   } = useDocumentList();
+
+  // ── Selection state ──────────────────────────────────────────
+  const [selectedUris, setSelectedUris] = useState<Set<string>>(new Set());
+  const isSelecting = selectedUris.size > 0;
+
+  const toggleSelection = (uri: string) => {
+    setSelectedUris((prev) => {
+      const next = new Set(prev);
+      if (next.has(uri)) {
+        next.delete(uri);
+      } else {
+        next.add(uri);
+      }
+      return next;
+    });
+  };
+
+  const clearSelection = () => {
+    setSelectedUris(new Set());
+  };
+
+  const handleDeleteSelected = () => {
+    const selected = documents.filter((d) => selectedUris.has(d.uri));
+    handleTrashDocuments(selected, clearSelection);
+  };
+
+  // ── Redirects ────────────────────────────────────────────────
 
   if (shouldRedirectNoFolder) {
     return <Redirect href="/folder-picker" />;
@@ -190,8 +254,22 @@ export function DocumentList() {
     return <RedirectAfterClear />;
   }
 
+  // ── Card interaction ─────────────────────────────────────────
+
   const handleOpenDocument = (doc: DocumentInfo) => {
     router.push({ pathname: '/canvas', params: { fileUri: doc.uri } });
+  };
+
+  const handleCardPress = (doc: DocumentInfo) => {
+    if (isSelecting) {
+      toggleSelection(doc.uri);
+    } else {
+      handleOpenDocument(doc);
+    }
+  };
+
+  const handleCardLongPress = (doc: DocumentInfo) => {
+    toggleSelection(doc.uri);
   };
 
   const renderItem = ({ item }: { item: DocumentInfo }) => {
@@ -199,11 +277,14 @@ export function DocumentList() {
       <NoteCard
         item={item}
         loading={isRefetching}
-        onPress={() => handleOpenDocument(item)}
-        onLongPress={() => handleTrashDocument(item)}
+        selected={isSelecting ? selectedUris.has(item.uri) : undefined}
+        onPress={() => handleCardPress(item)}
+        onLongPress={() => handleCardLongPress(item)}
       />
     );
   };
+
+  // ── Loading ──────────────────────────────────────────────────
 
   if (isLoading) {
     return (
@@ -213,33 +294,56 @@ export function DocumentList() {
     );
   }
 
+  // ── Render ───────────────────────────────────────────────────
+
   return (
     <View className="flex-1 p-safe">
-      <View className="border-b border-gray-300 px-6 pb-4 pt-4">
-        <View className="flex-row items-center justify-between">
-          <Text className="text-2xl font-bold text-black">Brudnopis</Text>
-          <View className="flex-row items-center gap-4">
+      {/* Header: selection action bar when selecting, normal header otherwise */}
+      {isSelecting ? (
+        <View className="border-b border-gray-300 px-6 pb-4 pt-4">
+          <View className="flex-row items-center justify-between">
             <Pressable
-              onPress={() => router.push('/settings')}
+              onPress={clearSelection}
               className="rounded-lg border border-gray-400 bg-gray-200 px-4 py-2.5 active:bg-gray-300"
             >
-              <MaterialIcons name="settings" size={20} color="black" />
+              <Text className="text-sm font-medium text-black">Cancel</Text>
             </Pressable>
+            <Text className="text-base font-medium text-black">{selectedUris.size} selected</Text>
             <Pressable
-              onPress={() => router.push('/trash')}
-              className="rounded-lg border border-gray-400 bg-gray-200 px-4 py-2.5 active:bg-gray-300"
+              onPress={handleDeleteSelected}
+              className="rounded-lg border border-red-800 bg-red-700 px-4 py-2.5 active:bg-red-900"
             >
-              <MaterialIcons name="delete" size={20} color="black" />
-            </Pressable>
-            <Pressable
-              onPress={handleNewDocument}
-              className="rounded-lg border border-sky-800 bg-sky-700 px-4 py-2.5 active:bg-sky-900"
-            >
-              <MaterialIcons name="add" size={22} color="white" />
+              <MaterialIcons name="delete" size={20} color="white" />
             </Pressable>
           </View>
         </View>
-      </View>
+      ) : (
+        <View className="border-b border-gray-300 px-6 pb-4 pt-4">
+          <View className="flex-row items-center justify-between">
+            <Text className="text-2xl font-bold text-black">Brudnopis</Text>
+            <View className="flex-row items-center gap-4">
+              <Pressable
+                onPress={() => router.push('/settings')}
+                className="rounded-lg border border-gray-400 bg-gray-200 px-4 py-2.5 active:bg-gray-300"
+              >
+                <MaterialIcons name="settings" size={20} color="black" />
+              </Pressable>
+              <Pressable
+                onPress={() => router.push('/trash')}
+                className="rounded-lg border border-gray-400 bg-gray-200 px-4 py-2.5 active:bg-gray-300"
+              >
+                <MaterialIcons name="delete" size={20} color="black" />
+              </Pressable>
+              <Pressable
+                onPress={handleNewDocument}
+                className="rounded-lg border border-sky-800 bg-sky-700 px-4 py-2.5 active:bg-sky-900"
+              >
+                <MaterialIcons name="add" size={22} color="white" />
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      )}
 
       {documents.length === 0 ? (
         <View className="flex-1 items-center justify-center px-8">

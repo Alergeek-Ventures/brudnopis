@@ -79,9 +79,11 @@ export function serializeSvgDocument(
     // Only emit data-style when non-default (pencil) for backward compatibility.
     const styleAttr =
       stroke.style && stroke.style !== 'pencil' ? ` data-style="${stroke.style}"` : '';
+    // Marker strokes render at 30% opacity so they highlight rather than cover.
+    const opacityAttr = stroke.style === 'marker' ? ' opacity="0.3"' : '';
 
     lines.push(
-      `  <path d="${d}" stroke="${stroke.color}" stroke-width="${stroke.width}" stroke-linecap="round" stroke-linejoin="round" fill="none" data-points="${dataPoints}"${styleAttr}/>`,
+      `  <path d="${d}" stroke="${stroke.color}" stroke-width="${stroke.width}" stroke-linecap="round" stroke-linejoin="round" fill="none"${opacityAttr} data-points="${dataPoints}"${styleAttr}/>`,
     );
   }
 

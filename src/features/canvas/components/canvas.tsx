@@ -8,8 +8,15 @@ import type {
 import { DrawingCanvasView as NativeDrawingCanvasView } from 'drawing-canvas';
 import { Redirect, useLocalSearchParams } from 'expo-router';
 import { useAtom, useAtomValue } from 'jotai';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, BackHandler, type LayoutChangeEvent, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  BackHandler,
+  type LayoutChangeEvent,
+  Pressable,
+  Text,
+  View,
+} from 'react-native';
 import { withUniwind } from 'uniwind';
 
 import { DEFAULT_PEN_SETTINGS, penSettingsAtom } from '@/features/canvas/atoms/pen-settings';
@@ -97,39 +104,30 @@ function CanvasContent({
 
   // ── Event handlers (sent to XState, no effects) ──────────────
 
-  const handleReady = useCallback(
-    (_event: ReadyEvent) => {
-      send({ type: 'CANVAS_READY' });
-    },
-    [send],
-  );
+  const handleReady = (_event: ReadyEvent) => {
+    send({ type: 'CANVAS_READY' });
+  };
 
-  const handleStrokeEnd = useCallback(
-    (event: StrokeEndEvent) => {
-      send({
-        type: 'STROKE_END',
-        points: event.nativeEvent.points,
-        color: event.nativeEvent.color,
-        width: event.nativeEvent.width,
-        style: (event.nativeEvent.style || 'pencil') as StrokeStyle,
-      });
-    },
-    [send],
-  );
+  const handleStrokeEnd = (event: StrokeEndEvent) => {
+    send({
+      type: 'STROKE_END',
+      points: event.nativeEvent.points,
+      color: event.nativeEvent.color,
+      width: event.nativeEvent.width,
+      style: (event.nativeEvent.style || 'pencil') as StrokeStyle,
+    });
+  };
 
-  const handleEraseEnd = useCallback(
-    (event: EraseEndEvent) => {
-      send({
-        type: 'ERASE_END',
-        indices: event.nativeEvent.indices,
-      });
-    },
-    [send],
-  );
+  const handleEraseEnd = (event: EraseEndEvent) => {
+    send({
+      type: 'ERASE_END',
+      indices: event.nativeEvent.indices,
+    });
+  };
 
-  const handleClose = useCallback(() => {
+  const handleClose = () => {
     send({ type: 'CLOSE_NOTE' });
-  }, [send]);
+  };
 
   // ── Toolbar bounds → excludeRects ──────────────────────────
   // Tracks the toolbar's on-screen bounds so the Onyx SDK doesn't
@@ -137,10 +135,10 @@ function CanvasContent({
 
   const [toolbarRect, setToolbarRect] = useState<ExcludeRect | null>(null);
 
-  const handleToolbarLayout = useCallback((event: LayoutChangeEvent) => {
+  const handleToolbarLayout = (event: LayoutChangeEvent) => {
     const { x, y, width, height } = event.nativeEvent.layout;
     setToolbarRect({ x, y, width, height });
-  }, []);
+  };
 
   const excludeRects = toolbarRect ? [toolbarRect] : undefined;
 
@@ -148,12 +146,20 @@ function CanvasContent({
   // Pauses raw drawing when expanded (so color/width pickers get
   // touch events), resumes when collapsed.
 
-  const handleToolbarExpandedChange = useCallback(
-    (expanded: boolean) => {
-      send({ type: expanded ? 'TOOLBAR_EXPANDED' : 'TOOLBAR_COLLAPSED' });
-    },
-    [send],
-  );
+  const [toolbarExpanded, setToolbarExpanded] = useState(false);
+
+  const handleToggleToolbar = () => {
+    setToolbarExpanded((prev) => {
+      const next = !prev;
+      send({ type: next ? 'TOOLBAR_EXPANDED' : 'TOOLBAR_COLLAPSED' });
+      return next;
+    });
+  };
+
+  const handleDismissToolbar = () => {
+    setToolbarExpanded(false);
+    send({ type: 'TOOLBAR_COLLAPSED' });
+  };
 
   const penType = activeTool === 'eraser' ? undefined : currentStyle;
   const strokeColor = activeTool === 'eraser' ? undefined : currentPen.color;
@@ -181,11 +187,20 @@ function CanvasContent({
           <Text className="mt-3 text-base text-gray-600">Saving…</Text>
         </View>
       ) : (
-        <Toolbar
-          onClose={handleClose}
-          onExpandedChange={handleToolbarExpandedChange}
-          onLayout={handleToolbarLayout}
-        />
+        <>
+          {/* Tap-outside-to-close: transparent overlay behind toolbar (z-10 < z-20).
+              Captures both finger and pen taps when the toolbar is expanded.
+              Only rendered while expanded — drawing is paused so touches propagate. */}
+          {toolbarExpanded && (
+            <Pressable className="absolute inset-0 z-10" onPress={handleDismissToolbar} />
+          )}
+          <Toolbar
+            expanded={toolbarExpanded}
+            onClose={handleClose}
+            onToggleExpand={handleToggleToolbar}
+            onLayout={handleToolbarLayout}
+          />
+        </>
       )}
     </View>
   );

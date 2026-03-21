@@ -2,8 +2,7 @@ import { useAtom } from 'jotai';
 import type { IconProps } from 'phosphor-react-native';
 import { CaretRight, Eraser, Highlighter, Pen, PenNib, X } from 'phosphor-react-native';
 import type { ComponentType } from 'react';
-import { useCallback, useRef, useState } from 'react';
-import { type LayoutChangeEvent, PanResponder, Pressable, View } from 'react-native';
+import { type LayoutChangeEvent, Pressable, View } from 'react-native';
 
 import { DEFAULT_PEN_SETTINGS, penSettingsAtom } from '@/features/canvas/atoms/pen-settings';
 import type { StrokeStyle } from '@/features/svg/types';
@@ -16,8 +15,11 @@ type IconComponent = ComponentType<IconProps>;
 type Tool = StrokeStyle | 'eraser';
 
 type ToolbarProps = {
+  /** Whether the toolbar is currently expanded (controlled by parent). */
+  expanded: boolean;
   onClose: () => void;
-  onExpandedChange: (expanded: boolean) => void;
+  /** Toggle between collapsed and expanded. */
+  onToggleExpand: () => void;
   /** Reports the toolbar's on-screen bounds for SDK exclude-rect calculation. */
   onLayout: (event: LayoutChangeEvent) => void;
 };
@@ -73,63 +75,13 @@ function getWidthPresets(style: StrokeStyle) {
 
 // ── Component ──────────────────────────────────────────────────
 
-export function Toolbar({ onClose, onExpandedChange, onLayout }: ToolbarProps) {
-  const [expanded, setExpanded] = useState(false);
+export function Toolbar({ expanded, onClose, onToggleExpand, onLayout }: ToolbarProps) {
   const [persisted, setPersisted] = useAtom(penSettingsAtom);
   const {
     activeTool = DEFAULT_PEN_SETTINGS.activeTool,
     lastPenStyle = DEFAULT_PEN_SETTINGS.lastPenStyle,
     penSettings = DEFAULT_PEN_SETTINGS.penSettings,
   } = persisted ?? DEFAULT_PEN_SETTINGS;
-
-  // ── Dragging (collapsed only) ──────────────────────────────
-  const [position, setPosition] = useState({ x: 0, y: 0 });
-  const positionRef = useRef({ x: 0, y: 0 });
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponder: (_evt, gestureState) => {
-        // Only start drag if moved > 10px (avoids hijacking taps)
-        return Math.abs(gestureState.dx) > 10 || Math.abs(gestureState.dy) > 10;
-      },
-      // positionRef always has the latest position (updated on release and
-      // on expand/collapse reset). No action needed on grant — dx/dy are
-      // relative deltas from the grant point, applied to positionRef.current
-      // in move and release handlers.
-      onPanResponderGrant: () => {},
-      onPanResponderMove: (_evt, gestureState) => {
-        const newPos = {
-          x: positionRef.current.x + gestureState.dx,
-          y: positionRef.current.y + gestureState.dy,
-        };
-        setPosition(newPos);
-      },
-      onPanResponderRelease: (_evt, gestureState) => {
-        const newPos = {
-          x: positionRef.current.x + gestureState.dx,
-          y: positionRef.current.y + gestureState.dy,
-        };
-        positionRef.current = newPos;
-        setPosition(newPos);
-      },
-    }),
-  ).current;
-
-  // ── Expand / collapse ──────────────────────────────────────
-
-  const handleToggleExpand = useCallback(() => {
-    setExpanded((prev) => {
-      const next = !prev;
-      if (next) {
-        // Expanding: snap back to original position
-        setPosition({ x: 0, y: 0 });
-        positionRef.current = { x: 0, y: 0 };
-      }
-      onExpandedChange(next);
-      return next;
-    });
-  }, [onExpandedChange]);
 
   // ── Tool selection ─────────────────────────────────────────
 
@@ -187,7 +139,7 @@ export function Toolbar({ onClose, onExpandedChange, onLayout }: ToolbarProps) {
               ))}
             </View>
             <Pressable
-              onPress={handleToggleExpand}
+              onPress={onToggleExpand}
               className="ml-2 rounded-md p-2.5 active:bg-gray-200"
             >
               <CaretRight size={18} color="black" />
@@ -247,15 +199,10 @@ export function Toolbar({ onClose, onExpandedChange, onLayout }: ToolbarProps) {
     );
   }
 
-  // ── Render: Collapsed (draggable pill) ─────────────────────
+  // ── Render: Collapsed (fixed pill) ──────────────────────────
 
   return (
-    <View
-      className="absolute right-0 top-0 z-20 pt-safe pr-safe"
-      style={{ transform: [{ translateX: position.x }, { translateY: position.y }] }}
-      onLayout={onLayout}
-      {...panResponder.panHandlers}
-    >
+    <View className="absolute right-0 top-0 z-20 pt-safe pr-safe" onLayout={onLayout}>
       <View className="flex-row items-center rounded-lg border border-gray-300 bg-white">
         <Pressable
           onPress={onClose}
@@ -263,7 +210,7 @@ export function Toolbar({ onClose, onExpandedChange, onLayout }: ToolbarProps) {
         >
           <X size={20} color="black" />
         </Pressable>
-        <Pressable onPress={handleToggleExpand} className="rounded-r-lg p-3 active:bg-gray-200">
+        <Pressable onPress={onToggleExpand} className="rounded-r-lg p-3 active:bg-gray-200">
           {(() => {
             const ActiveIcon = TOOL_ICONS[activeTool];
             return (

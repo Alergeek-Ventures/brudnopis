@@ -335,8 +335,9 @@ class DrawingCanvasView(
      * Pure rendering — no side effects on stroke state.
      *
      * For "fountain" style, varies stroke width per segment based on pressure
-     * data (index 2 of each point). For all other styles, draws a constant-
-     * width path using the paint's strokeWidth.
+     * data (index 2 of each point). For "marker" style, renders at 30% opacity
+     * so it highlights rather than covers underlying content. For all other
+     * styles, draws a constant-width path using the paint's strokeWidth.
      */
     private fun renderPointsToBitmap(points: List<FloatArray>, paint: Paint, style: String = "pencil") {
         val canvas = bitmapCanvas ?: return
@@ -345,6 +346,13 @@ class DrawingCanvasView(
         if (style == "fountain") {
             renderFountainToBitmap(points, paint)
             return
+        }
+
+        // Marker strokes render at 30% opacity so they highlight content
+        // rather than covering it. Save/restore alpha to avoid leaking.
+        val savedAlpha = paint.alpha
+        if (style == "marker") {
+            paint.alpha = 77 // ~30% of 255
         }
 
         val path = Path()
@@ -363,6 +371,10 @@ class DrawingCanvasView(
         }
 
         canvas.drawPath(path, paint)
+
+        if (style == "marker") {
+            paint.alpha = savedAlpha
+        }
     }
 
     /**
