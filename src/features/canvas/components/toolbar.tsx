@@ -1,9 +1,11 @@
+import { useAtom } from 'jotai';
 import type { IconProps } from 'phosphor-react-native';
 import { CaretRight, Eraser, Highlighter, Pen, PenNib, X } from 'phosphor-react-native';
 import type { ComponentType } from 'react';
 import { useCallback, useRef, useState } from 'react';
 import { type LayoutChangeEvent, PanResponder, Pressable, View } from 'react-native';
 
+import { DEFAULT_PEN_SETTINGS, penSettingsAtom } from '@/features/canvas/atoms/pen-settings';
 import type { StrokeStyle } from '@/features/svg/types';
 
 /** Phosphor icon component type — all toolbar icons share this shape. */
@@ -13,22 +15,8 @@ type IconComponent = ComponentType<IconProps>;
 
 type Tool = StrokeStyle | 'eraser';
 
-type PenSettings = {
-  color: string;
-  width: number;
-};
-
-export type ToolbarState = {
-  tool: Tool;
-  /** Active stroke style (excluding eraser — eraser keeps last pen style for resume). */
-  strokeStyle: StrokeStyle;
-  strokeColor: string;
-  strokeWidth: number;
-};
-
 type ToolbarProps = {
   onClose: () => void;
-  onChange: (state: ToolbarState) => void;
   onExpandedChange: (expanded: boolean) => void;
   /** Reports the toolbar's on-screen bounds for SDK exclude-rect calculation. */
   onLayout: (event: LayoutChangeEvent) => void;
@@ -65,13 +53,6 @@ const MARKER_WIDTHS = [
   { label: 'XXL', value: 80 },
 ] as const;
 
-/** Default per-pen settings (color + width). */
-const DEFAULT_PEN_SETTINGS: Record<StrokeStyle, PenSettings> = {
-  pencil: { color: '#000000', width: 5 },
-  fountain: { color: '#000000', width: 5 },
-  marker: { color: '#FFFF00', width: 40 },
-};
-
 const TOOLS: { tool: Tool; Icon: IconComponent; label: string }[] = [
   { tool: 'pencil', Icon: Pen, label: 'Ballpoint' },
   { tool: 'fountain', Icon: PenNib, label: 'Fountain' },
@@ -90,38 +71,16 @@ function getWidthPresets(style: StrokeStyle) {
   return style === 'marker' ? MARKER_WIDTHS : PEN_WIDTHS;
 }
 
-function getToolbarState(
-  tool: Tool,
-  lastPenStyle: StrokeStyle,
-  penSettings: Record<StrokeStyle, PenSettings>,
-): ToolbarState {
-  if (tool === 'eraser') {
-    const settings = penSettings[lastPenStyle];
-    return {
-      tool: 'eraser',
-      strokeStyle: lastPenStyle,
-      strokeColor: settings.color,
-      strokeWidth: settings.width,
-    };
-  }
-  const settings = penSettings[tool];
-  return {
-    tool,
-    strokeStyle: tool,
-    strokeColor: settings.color,
-    strokeWidth: settings.width,
-  };
-}
-
 // ── Component ──────────────────────────────────────────────────
 
-export function Toolbar({ onClose, onChange, onExpandedChange, onLayout }: ToolbarProps) {
+export function Toolbar({ onClose, onExpandedChange, onLayout }: ToolbarProps) {
   const [expanded, setExpanded] = useState(false);
-  const [activeTool, setActiveTool] = useState<Tool>('pencil');
-  const [lastPenStyle, setLastPenStyle] = useState<StrokeStyle>('pencil');
-  const [penSettings, setPenSettings] = useState<Record<StrokeStyle, PenSettings>>({
-    ...DEFAULT_PEN_SETTINGS,
-  });
+  const [persisted, setPersisted] = useAtom(penSettingsAtom);
+  const {
+    activeTool = DEFAULT_PEN_SETTINGS.activeTool,
+    lastPenStyle = DEFAULT_PEN_SETTINGS.lastPenStyle,
+    penSettings = DEFAULT_PEN_SETTINGS.penSettings,
+  } = persisted ?? DEFAULT_PEN_SETTINGS;
 
   // ── Dragging (collapsed only) ──────────────────────────────
   const [position, setPosition] = useState({ x: 0, y: 0 });
@@ -174,39 +133,30 @@ export function Toolbar({ onClose, onChange, onExpandedChange, onLayout }: Toolb
 
   // ── Tool selection ─────────────────────────────────────────
 
-  const emitChange = useCallback(
-    (tool: Tool, style: StrokeStyle, settings: Record<StrokeStyle, PenSettings>) => {
-      onChange(getToolbarState(tool, style, settings));
-    },
-    [onChange],
-  );
-
   const handleToolSelect = (tool: Tool) => {
-    setActiveTool(tool);
-    if (tool !== 'eraser') {
-      setLastPenStyle(tool);
-    }
-    emitChange(tool, tool !== 'eraser' ? tool : lastPenStyle, penSettings);
+    setPersisted({
+      activeTool: tool,
+      lastPenStyle: tool !== 'eraser' ? tool : lastPenStyle,
+      penSettings,
+    });
   };
 
   const handleColorSelect = (color: string) => {
     const style = activeTool === 'eraser' ? lastPenStyle : activeTool;
-    const updated = {
-      ...penSettings,
-      [style]: { ...penSettings[style], color },
-    };
-    setPenSettings(updated);
-    emitChange(activeTool, style, updated);
+    setPersisted({
+      activeTool,
+      lastPenStyle,
+      penSettings: { ...penSettings, [style]: { ...penSettings[style], color } },
+    });
   };
 
   const handleWidthSelect = (width: number) => {
     const style = activeTool === 'eraser' ? lastPenStyle : activeTool;
-    const updated = {
-      ...penSettings,
-      [style]: { ...penSettings[style], width },
-    };
-    setPenSettings(updated);
-    emitChange(activeTool, style, updated);
+    setPersisted({
+      activeTool,
+      lastPenStyle,
+      penSettings: { ...penSettings, [style]: { ...penSettings[style], width } },
+    });
   };
 
   // ── Derived values ─────────────────────────────────────────

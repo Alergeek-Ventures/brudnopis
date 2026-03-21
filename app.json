@@ -1,7 +1,8 @@
 {
   "expo": {
-    "name": "notes",
+    "name": "Brudnopis",
     "slug": "notes",
+    "owner": "alergeek",
     "version": "1.0.0",
     "orientation": "default",
     "icon": "./src/assets/images/icon.png",
@@ -15,7 +16,7 @@
         "monochromeImage": "./src/assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "me.alergeek.notes"
+      "package": "ventures.alergeek.brudnopis"
     },
     "plugins": [
       "expo-router",
@@ -35,8 +36,11 @@
       "typedRoutes": true,
       "reactCompiler": true
     },
-    "ios": {
-      "bundleIdentifier": "me.alergeek.notes"
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "381b794c-006e-4b9a-8efb-0df64c342221"
+      }
     }
   }
 }

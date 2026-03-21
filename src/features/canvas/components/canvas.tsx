@@ -12,13 +12,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, BackHandler, type LayoutChangeEvent, Text, View } from 'react-native';
 import { withUniwind } from 'uniwind';
 
+import { DEFAULT_PEN_SETTINGS, penSettingsAtom } from '@/features/canvas/atoms/pen-settings';
 import { noteLifecycleMachineAtom } from '@/features/recognition/atoms/note-lifecycle-machine';
 import { activeLanguageAtom } from '@/features/settings/atoms/active-language';
 import type { Stroke, StrokeStyle } from '@/features/svg/types';
 
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from '@/types/canvas';
 
-import { Toolbar, type ToolbarState } from './toolbar';
+import { Toolbar } from './toolbar';
 
 // withUniwind auto-mode intercepts any prop whose name ends with "Style" and
 // wraps it in a style-merge array, which breaks native string props like
@@ -55,13 +56,15 @@ function CanvasContent({
   // Show a loading overlay while the machine saves + refetches thumbnails.
   const isSaving = snapshot.matches('navigating');
 
-  // Toolbar state — tracks current tool, stroke style/color/width.
-  const [toolbarState, setToolbarState] = useState<ToolbarState>({
-    tool: 'pencil',
-    strokeStyle: 'pencil',
-    strokeColor: '#000000',
-    strokeWidth: 5,
-  });
+  // Pen settings — the toolbar owns writes; canvas derives native props.
+  const persisted = useAtomValue(penSettingsAtom);
+  const {
+    activeTool = DEFAULT_PEN_SETTINGS.activeTool,
+    lastPenStyle = DEFAULT_PEN_SETTINGS.lastPenStyle,
+    penSettings = DEFAULT_PEN_SETTINGS.penSettings,
+  } = persisted ?? DEFAULT_PEN_SETTINGS;
+  const currentStyle = activeTool === 'eraser' ? lastPenStyle : activeTool;
+  const currentPen = penSettings[currentStyle];
 
   // Violation: useEffect for BackHandler subscription lifecycle.
   // Rationale: BackHandler requires addEventListener/remove pairing — no
@@ -128,10 +131,6 @@ function CanvasContent({
     send({ type: 'CLOSE_NOTE' });
   }, [send]);
 
-  const handleToolbarChange = useCallback((state: ToolbarState) => {
-    setToolbarState(state);
-  }, []);
-
   // ── Toolbar bounds → excludeRects ──────────────────────────
   // Tracks the toolbar's on-screen bounds so the Onyx SDK doesn't
   // capture stylus input over it. Updated via onLayout (no effects).
@@ -156,9 +155,9 @@ function CanvasContent({
     [send],
   );
 
-  const penType = toolbarState.tool === 'eraser' ? undefined : toolbarState.strokeStyle;
-  const strokeColor = toolbarState.tool === 'eraser' ? undefined : toolbarState.strokeColor;
-  const strokeWidth = toolbarState.tool === 'eraser' ? undefined : toolbarState.strokeWidth;
+  const penType = activeTool === 'eraser' ? undefined : currentStyle;
+  const strokeColor = activeTool === 'eraser' ? undefined : currentPen.color;
+  const strokeWidth = activeTool === 'eraser' ? undefined : currentPen.width;
 
   return (
     <View className="flex-1 bg-white">
@@ -184,7 +183,6 @@ function CanvasContent({
       ) : (
         <Toolbar
           onClose={handleClose}
-          onChange={handleToolbarChange}
           onExpandedChange={handleToolbarExpandedChange}
           onLayout={handleToolbarLayout}
         />

@@ -217,7 +217,7 @@ export function DocumentList() {
     <View className="flex-1 p-safe">
       <View className="border-b border-gray-300 px-6 pb-4 pt-4">
         <View className="flex-row items-center justify-between">
-          <Text className="text-2xl font-bold text-black">Notes</Text>
+          <Text className="text-2xl font-bold text-black">Brudnopis</Text>
           <View className="flex-row items-center gap-4">
             <Pressable
               onPress={() => router.push('/settings')}
