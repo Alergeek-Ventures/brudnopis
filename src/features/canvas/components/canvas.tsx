@@ -20,9 +20,8 @@ import {
 } from 'react-native';
 import { withUniwind } from 'uniwind';
 
+import { noteMachineAtom } from '@/features/canvas/atoms/note-machine';
 import { DEFAULT_PEN_SETTINGS, penSettingsAtom } from '@/features/canvas/atoms/pen-settings';
-import { noteLifecycleMachineAtom } from '@/features/recognition/atoms/note-lifecycle-machine';
-import { activeLanguageAtom } from '@/features/settings/atoms/active-language';
 import type { Stroke, StrokeStyle } from '@/features/svg/types';
 
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from '@/types/canvas';
@@ -58,23 +57,15 @@ function CanvasContent({
 }) {
   const canvasRef = useRef<DrawingCanvasRef>(null);
   const strokesRef = useRef<Stroke[]>([]);
-  const activeLanguage = useAtomValue(activeLanguageAtom);
-  const [snapshot, send] = useAtom(noteLifecycleMachineAtom);
+  const [snapshot, send] = useAtom(noteMachineAtom);
 
-  // Show "Saving…" overlay once the note is closing. Derived from machine
-  // state: navigating (after note closed) or the child noteEditor is past
-  // the editing sub-states (closingDirty / flushing / stopping).
-  const noteEditor = snapshot.children.noteEditor;
-  // biome-ignore lint/suspicious/noExplicitAny: XState child snapshot union lacks .value on non-machine types
-  const childState = (noteEditor?.getSnapshot?.() as any)?.value;
+  // Show "Saving…" overlay once the note is closing. Derived directly from
+  // the machine state — no child actor indirection needed.
   const isClosing =
-    snapshot.matches('navigating') ||
-    (snapshot.matches('editing') &&
-      typeof childState === 'string' &&
-      (childState === 'closingDirty' ||
-        childState === 'flushing' ||
-        childState === 'stopping' ||
-        childState === 'closed'));
+    snapshot.matches('closingDirty') ||
+    snapshot.matches('flushing') ||
+    snapshot.matches('stopping') ||
+    snapshot.matches('navigating');
 
   // Pen settings — the toolbar owns writes; canvas derives native props.
   const persisted = useAtomValue(penSettingsAtom);
@@ -125,7 +116,6 @@ function CanvasContent({
       type: 'OPEN_NOTE',
       fileUri,
       folderUri,
-      lang: activeLanguage,
       width: CANVAS_WIDTH,
       height: CANVAS_HEIGHT,
       backgroundPattern: BACKGROUND_PATTERN,

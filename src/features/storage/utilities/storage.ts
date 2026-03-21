@@ -5,8 +5,6 @@ import {
   writeAsStringAsync,
 } from 'expo-file-system/legacy';
 
-import { extractMetadataText } from '@/features/svg/utilities/metadata';
-
 import type { DocumentInfo } from '../types';
 import { generateFilename, parseFilenameToDate } from './naming';
 
@@ -65,7 +63,7 @@ function extractFilename(uri: string): string {
 /**
  * List all .svg documents in the given folder.
  * Returns DocumentInfo[] sorted reverse-chronological (newest first).
- * Reads each SVG in parallel to extract recognized text from <metadata>.
+ * Reads each SVG in parallel to provide content for thumbnail rendering.
  */
 export async function listDocuments(folderUri: string): Promise<DocumentInfo[]> {
   const uris = await StorageAccessFramework.readDirectoryAsync(folderUri);
@@ -76,12 +74,9 @@ export async function listDocuments(folderUri: string): Promise<DocumentInfo[]> 
 
   const docs = await Promise.all(
     svgEntries.map(async ({ uri, filename }) => {
-      let recognizedText: string | undefined;
       let svgContent: string | undefined;
       try {
-        const svg = await readAsStringAsync(ensureSafUriEncoded(uri));
-        recognizedText = extractMetadataText(svg);
-        svgContent = svg;
+        svgContent = await readAsStringAsync(ensureSafUriEncoded(uri));
       } catch (err) {
         console.error('Failed to read document:', uri, err);
       }
@@ -90,7 +85,6 @@ export async function listDocuments(folderUri: string): Promise<DocumentInfo[]> 
         uri,
         filename,
         createdAt: parseFilenameToDate(filename),
-        recognizedText,
         svgContent,
       };
     }),

@@ -1,7 +1,6 @@
 import '../global.css';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { isBooxDevice } from 'device-info';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
@@ -13,6 +12,7 @@ import { useEffect } from 'react';
 import { SafeAreaListener, SafeAreaProvider } from 'react-native-safe-area-context';
 import { Uniwind } from 'uniwind';
 import { UnsupportedDeviceScreen } from '@/features/device-gate/components/unsupported-device-screen';
+import { isBooxDevice } from '@/features/device-gate/utilities/device-check';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -28,7 +28,7 @@ const queryClient = new QueryClient({
 
 /**
  * Syncs our QueryClient instance into jotai-tanstack-query's queryClientAtom.
- * This ensures the XState machine's onRecognitionComplete action invalidates
+ * This ensures the XState note machine's refetchAndNavigate actor uses
  * the same cache that QueryClientProvider uses.
  */
 function HydrateAtoms({ children }: { children: ReactNode }) {

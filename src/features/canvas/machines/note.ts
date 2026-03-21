@@ -14,25 +14,11 @@ const SAVE_DEBOUNCE_MS = 1000;
 
 // ── Types ──────────────────────────────────────────────────────
 
-export type NoteMachineInput = {
-  /** SAF URI of an existing document, or null for a brand-new note. */
-  fileUri: string | null;
-  /** SAF URI of the folder to create a new file in (required when fileUri is null). */
-  folderUri: string | null;
-  lang: string;
-  width: number;
-  height: number;
-  backgroundPattern: BackgroundPattern;
-  strokesRef: MutableRefObject<Stroke[]>;
-  canvasRef: MutableRefObject<DrawingCanvasRef | null>;
-};
-
 type NoteMachineContext = {
   /** SAF URI of the document. Null until the first save for new notes. */
   fileUri: string | null;
   /** SAF URI of the folder (used to create the file on first save). */
   folderUri: string | null;
-  lang: string;
   width: number;
   height: number;
   backgroundPattern: BackgroundPattern;
@@ -46,12 +32,6 @@ type NoteMachineContext = {
   surfaceRecreated: boolean;
   /** True when APP_BACKGROUND arrives during saving — route to backgrounded after save completes. */
   backgroundPending: boolean;
-};
-
-export type NoteMachineOutput = {
-  /** SAF URI of the document, or null if the note was never saved. */
-  fileUri: string | null;
-  lang: string;
 };
 
 // ── Actors (async operations) ──────────────────────────────────
@@ -138,19 +118,6 @@ const serializeAndSave = fromPromise(
 );
 
 /**
- * Close raw drawing and trigger a full e-ink refresh.
- *
- * Guaranteed sequence:
- * 1. stopDrawing — closes Onyx SDK raw drawing permanently, unfreezes
- *    the e-ink screen. The SurfaceView surface stays alive so the bitmap
- *    (with all strokes) remains visible.
- * 2. refreshScreen — GC waveform drives every pixel black→white,
- *    clearing any ghosting from the drawing session.
- *
- * Only after both complete does the machine transition to the final
- * `closed` state, which triggers navigation away.
- */
-/**
  * Trigger a full e-ink refresh to clear ghosting from the drawing session.
  *
  * Raw drawing is already stopped by the `stopDrawing` entry action on
@@ -213,13 +180,21 @@ const restoreCanvas = fromPromise(
 export const noteMachine = setup({
   types: {
     context: {} as NoteMachineContext,
-    input: {} as NoteMachineInput,
-    output: {} as NoteMachineOutput,
     events: {} as
+      | {
+          type: 'OPEN_NOTE';
+          fileUri: string | null;
+          folderUri: string | null;
+          width: number;
+          height: number;
+          backgroundPattern: BackgroundPattern;
+          strokesRef: MutableRefObject<Stroke[]>;
+          canvasRef: MutableRefObject<DrawingCanvasRef | null>;
+        }
       | { type: 'STROKE_END'; points: string; color: string; width: number; style?: StrokeStyle }
       | { type: 'ERASE_END'; indices: number[] }
       | { type: 'CANVAS_READY' }
-      | { type: 'CLOSE' }
+      | { type: 'CLOSE_NOTE' }
       | { type: 'TOOLBAR_EXPANDED' }
       | { type: 'TOOLBAR_COLLAPSED' }
       | { type: 'APP_BACKGROUND' }
@@ -231,12 +206,30 @@ export const noteMachine = setup({
     restoreCanvas,
     serializeAndSave,
     einkRefresh,
+    /** Provided at runtime: refetch document list then navigate back. */
+    refetchAndNavigate: fromPromise(async () => {}),
   },
   guards: {
     isCanvasReady: ({ context }) => context.canvasReady,
     isBackgroundPending: ({ context }) => context.backgroundPending,
   },
   actions: {
+    assignOpenNote: assign({
+      fileUri: ({ event }) => (event.type === 'OPEN_NOTE' ? event.fileUri : null),
+      folderUri: ({ event }) => (event.type === 'OPEN_NOTE' ? event.folderUri : null),
+      width: ({ event }) => (event.type === 'OPEN_NOTE' ? event.width : 0),
+      height: ({ event }) => (event.type === 'OPEN_NOTE' ? event.height : 0),
+      backgroundPattern: ({ event }) =>
+        event.type === 'OPEN_NOTE' ? event.backgroundPattern : ('dotted' as BackgroundPattern),
+      strokesRef: ({ context, event }) =>
+        event.type === 'OPEN_NOTE' ? event.strokesRef : context.strokesRef,
+      canvasRef: ({ context, event }) =>
+        event.type === 'OPEN_NOTE' ? event.canvasRef : context.canvasRef,
+      loadedStrokes: () => [],
+      canvasReady: () => false,
+      surfaceRecreated: () => false,
+      backgroundPending: () => false,
+    }),
     // Violation: Imperative ref mutations bypass XState's assign semantics.
     // Rationale: strokesRef mutates on every stylus stroke-end. Using assign
     // would trigger snapshot updates and React re-renders for data that is
@@ -283,29 +276,37 @@ export const noteMachine = setup({
 }).createMachine({
   id: 'note',
 
-  context: ({ input }) => ({
-    fileUri: input.fileUri,
-    folderUri: input.folderUri,
-    lang: input.lang,
-    width: input.width,
-    height: input.height,
-    backgroundPattern: input.backgroundPattern,
-    strokesRef: input.strokesRef,
-    canvasRef: input.canvasRef,
+  // Placeholder context — overwritten by OPEN_NOTE's assignOpenNote action
+  // before the machine leaves idle. Refs are initialized lazily; the idle
+  // state never reads them.
+  context: () => ({
+    fileUri: null,
+    folderUri: null,
+    width: 0,
+    height: 0,
+    backgroundPattern: 'dotted' as BackgroundPattern,
+    // biome-ignore lint/suspicious/noExplicitAny: placeholder ref, never read in idle state
+    strokesRef: { current: [] } as any,
+    // biome-ignore lint/suspicious/noExplicitAny: placeholder ref, never read in idle state
+    canvasRef: { current: null } as any,
     loadedStrokes: [],
     canvasReady: false,
     surfaceRecreated: false,
     backgroundPending: false,
   }),
 
-  initial: 'loading',
-
-  output: ({ context }) => ({
-    fileUri: context.fileUri,
-    lang: context.lang,
-  }),
+  initial: 'idle',
 
   states: {
+    idle: {
+      on: {
+        OPEN_NOTE: {
+          target: 'loading',
+          actions: 'assignOpenNote',
+        },
+      },
+    },
+
     // Phase 1: Load the SVG file and parse strokes.
     // Also accepts CANVAS_READY — the native surface may become ready
     // before or after the SVG loads.
@@ -397,6 +398,13 @@ export const noteMachine = setup({
         TOOLBAR_COLLAPSED: {
           actions: 'resumeDrawing',
         },
+        // Allow re-opening a different note (stops current drawing session,
+        // starts fresh). Same UX as the old lifecycle machine's OPEN_NOTE
+        // re-entry while in editing.
+        OPEN_NOTE: {
+          target: 'loading',
+          actions: 'assignOpenNote',
+        },
       },
 
       states: {
@@ -410,7 +418,7 @@ export const noteMachine = setup({
               target: 'dirty',
               actions: 'eraseStrokes',
             },
-            CLOSE: {
+            CLOSE_NOTE: {
               target: '#note.stopping',
             },
             APP_BACKGROUND: {
@@ -432,7 +440,7 @@ export const noteMachine = setup({
               reenter: true,
               actions: 'eraseStrokes',
             },
-            CLOSE: {
+            CLOSE_NOTE: {
               target: '#note.closingDirty',
             },
             APP_BACKGROUND: {
@@ -503,6 +511,7 @@ export const noteMachine = setup({
         },
       },
     },
+
     saving: {
       on: {
         // Strokes arriving mid-save cancel the in-flight save (exiting
@@ -609,8 +618,8 @@ export const noteMachine = setup({
     },
 
     // Phase 3: Close raw drawing and refresh the e-ink display.
-    // Runs AFTER saving so the SVG is on disk, and BEFORE the final
-    // state so navigation only happens once the screen has settled.
+    // Runs AFTER saving so the SVG is on disk, and BEFORE navigation
+    // so the screen has settled before the document list appears.
     // Entry stops raw drawing (idempotent) so the "Saving…" overlay
     // is visible on clean-close paths that skip closingDirty.
     stopping: {
@@ -618,22 +627,34 @@ export const noteMachine = setup({
       invoke: {
         src: 'einkRefresh',
         onDone: {
-          target: 'closed',
+          target: 'navigating',
         },
         onError: {
           // Best-effort — don't block exit if refresh fails.
-          target: 'closed',
+          target: 'navigating',
         },
       },
     },
 
-    closed: {
-      type: 'final',
+    // Refetch the document list with fresh SVG content, then navigate
+    // back. Runs as a proper state so the user stays on the canvas
+    // (bitmap visible) until thumbnails are ready — no stale flash.
+    navigating: {
+      invoke: {
+        src: 'refetchAndNavigate',
+        onDone: {
+          target: 'idle',
+        },
+        onError: {
+          // Best-effort — return to idle even if refetch fails.
+          target: 'idle',
+        },
+      },
     },
 
     error: {
       on: {
-        CLOSE: {
+        CLOSE_NOTE: {
           target: 'stopping',
         },
       },

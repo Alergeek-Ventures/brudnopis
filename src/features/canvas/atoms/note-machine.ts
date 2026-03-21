@@ -4,7 +4,7 @@ import { queryClientAtom } from 'jotai-tanstack-query';
 import { atomWithMachine } from 'jotai-xstate';
 import { fromPromise } from 'xstate';
 
-import { noteLifecycleMachine } from '../machines/lifecycle';
+import { noteMachine } from '../machines/note';
 
 // ── Debug inspector ────────────────────────────────────────────
 // DO NOT REMOVE — used to debug XState machines at runtime.
@@ -62,23 +62,24 @@ function _debugInspector(event: any) {
   }
 }
 
-// ── Note lifecycle machine (XState, backed by Jotai) ───────────
+// ── Note machine (XState, backed by Jotai) ─────────────────────
 
 /**
- * The note lifecycle state machine atom.
+ * The note state machine atom.
  *
- * Manages the note editing lifecycle and recognition pipeline.
+ * Manages the full note editing lifecycle: idle → loading → editing →
+ * saving → closing → navigating → idle.
+ *
  * Components interact by reading snapshot state and sending events:
  *
- *   const [snapshot, send] = useAtom(noteLifecycleMachineAtom);
- *   send({ type: 'OPEN_NOTE', fileUri, lang, ... });
+ *   const [snapshot, send] = useAtom(noteMachineAtom);
+ *   send({ type: 'OPEN_NOTE', fileUri, ... });
  *
  * Provided at init time via get(queryClientAtom):
  * - refetchAndNavigate actor: awaits document list refetch, then navigates back
- * - onRecognitionComplete action: invalidates the document list cache
  */
-export const noteLifecycleMachineAtom = atomWithMachine(
-  () => noteLifecycleMachine,
+export const noteMachineAtom = atomWithMachine(
+  () => noteMachine,
   (get: Getter) => {
     const queryClient = get(queryClientAtom);
     return {
@@ -94,11 +95,6 @@ export const noteLifecycleMachineAtom = atomWithMachine(
           await queryClient.refetchQueries({ queryKey: ['documents'] });
           router.back();
         }),
-      },
-      actions: {
-        onRecognitionComplete: () => {
-          queryClient.invalidateQueries({ queryKey: ['documents'] });
-        },
       },
     };
   },

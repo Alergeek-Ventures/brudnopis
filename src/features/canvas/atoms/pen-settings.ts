@@ -12,8 +12,7 @@ type Tool = StrokeStyle | 'eraser';
 
 /**
  * Persisted toolbar state — remembers the last-used pen, stroke width, and
- * color across canvas sessions. Uses the same `atomWithStorage` pattern as
- * other persisted settings (e.g. `activeLanguageAtom`).
+ * color across canvas sessions.
  */
 export type PersistedToolbarState = {
   activeTool: Tool;

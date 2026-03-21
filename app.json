@@ -30,7 +30,16 @@
         }
       ],
       "expo-font",
-      "./src/features/canvas/plugins/with-boox-sdk"
+      "./src/features/canvas/plugins/with-boox-sdk",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "enableMinifyInReleaseBuilds": true,
+            "extraProguardRules": "-keep class com.onyx.android.sdk.** { *; }\n-dontwarn com.onyx.android.sdk.**"
+          }
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
