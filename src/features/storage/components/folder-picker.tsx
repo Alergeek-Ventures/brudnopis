@@ -1,28 +1,33 @@
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { Pressable, Text, View } from 'react-native';
 
 import { pickFolder } from '../utilities/storage';
 
 export function FolderPicker() {
+  const queryClient = useQueryClient();
+
   const pickMutation = useMutation({
     mutationFn: () => pickFolder(),
     onSuccess: (uri) => {
       if (uri) {
+        queryClient.setQueryData(['folderUri'], uri);
         router.replace('/');
       }
     },
   });
 
   return (
-    <View className="bg-white pt-safe px-safe">
-      <View className="px-8">
-        <Text className="text-center text-base leading-6 text-gray-600">
-          Choose a folder to store your notes.
-        </Text>
-        <Text className="text-center text-base leading-6 text-gray-600">
-          Documents are saved as SVG files.
-        </Text>
+    <View className="flex-1 items-center justify-center bg-white px-safe">
+      <View className="items-center gap-6 px-8">
+        <View className="gap-1">
+          <Text className="text-center text-base leading-6 text-gray-600">
+            Choose a folder to store your notes.
+          </Text>
+          <Text className="text-center text-base leading-6 text-gray-600">
+            Documents are saved as SVG files.
+          </Text>
+        </View>
         {pickMutation.isError ? (
           <Text className="text-center text-sm text-red-700">
             Failed to pick folder. Please try again.

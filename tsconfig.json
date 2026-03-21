@@ -4,6 +4,7 @@
     "strict": true,
     "paths": {
       "@/*": ["./src/*"],
+      "device-info": ["./src/native-modules/device-info"],
       "drawing-canvas": ["./src/native-modules/drawing-canvas"],
       "ink-recognition": ["./src/native-modules/ink-recognition"]
     }
