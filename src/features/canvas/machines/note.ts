@@ -1,7 +1,7 @@
 import type { DrawingCanvasRef, NativeStrokeData } from 'drawing-canvas';
 import { refreshScreen } from 'drawing-canvas';
 import type { MutableRefObject } from 'react';
-import { type ActorRefFrom, assign, fromPromise, setup } from 'xstate';
+import { type ActorRefFrom, assign, fromPromise, setup, stateIn } from 'xstate';
 import { createDocument, loadDocument, saveDocument } from '@/features/storage/utilities/storage';
 import type { BackgroundPattern, Stroke, StrokeStyle } from '@/features/svg/types';
 import { decodePoints, encodePoints } from '@/features/svg/utilities/points';
@@ -26,12 +26,6 @@ type NoteMachineContext = {
   canvasRef: MutableRefObject<DrawingCanvasRef | null>;
   /** Strokes parsed from SVG, held between loading and restoring states. */
   loadedStrokes: Stroke[];
-  /** Whether the native canvas surface is created and ready for commands. */
-  canvasReady: boolean;
-  /** True when CANVAS_READY fires while backgrounded — surface was destroyed and recreated. */
-  surfaceRecreated: boolean;
-  /** True when APP_BACKGROUND arrives during saving — route to backgrounded after save completes. */
-  backgroundPending: boolean;
 };
 
 // ── Actors (async operations) ──────────────────────────────────
@@ -210,8 +204,8 @@ export const noteMachine = setup({
     refetchAndNavigate: fromPromise(async () => {}),
   },
   guards: {
-    isCanvasReady: ({ context }) => context.canvasReady,
-    isBackgroundPending: ({ context }) => context.backgroundPending,
+    isBackgrounding: stateIn({ saving: 'backgrounding' }),
+    isSurfaceRecreated: stateIn({ editing: { backgrounded: 'surfaceRecreated' } }),
   },
   actions: {
     assignOpenNote: assign({
@@ -226,9 +220,6 @@ export const noteMachine = setup({
       canvasRef: ({ context, event }) =>
         event.type === 'OPEN_NOTE' ? event.canvasRef : context.canvasRef,
       loadedStrokes: () => [],
-      canvasReady: () => false,
-      surfaceRecreated: () => false,
-      backgroundPending: () => false,
     }),
     // Violation: Imperative ref mutations bypass XState's assign semantics.
     // Rationale: strokesRef mutates on every stylus stroke-end. Using assign
@@ -290,9 +281,6 @@ export const noteMachine = setup({
     // biome-ignore lint/suspicious/noExplicitAny: placeholder ref, never read in idle state
     canvasRef: { current: null } as any,
     loadedStrokes: [],
-    canvasReady: false,
-    surfaceRecreated: false,
-    backgroundPending: false,
   }),
 
   initial: 'idle',
@@ -307,58 +295,59 @@ export const noteMachine = setup({
       },
     },
 
-    // Phase 1: Load the SVG file and parse strokes.
-    // Also accepts CANVAS_READY — the native surface may become ready
-    // before or after the SVG loads.
+    // Phase 1: Load the SVG file and wait for the native canvas surface.
+    // Parallel state — both regions must reach their final states before
+    // the machine proceeds to `restoring`. This eliminates the `canvasReady`
+    // context flag: the state graph itself encodes readiness.
     loading: {
-      invoke: {
-        src: 'loadDoc',
-        input: ({ context }) => ({ fileUri: context.fileUri }),
-        onDone: [
-          {
-            // Canvas already ready — go straight to restoring.
-            target: 'restoring',
-            guard: 'isCanvasReady',
-            actions: [
-              ({ context, event }) => {
-                context.strokesRef.current = event.output.strokes;
+      type: 'parallel',
+      states: {
+        svg: {
+          initial: 'parsing',
+          states: {
+            parsing: {
+              invoke: {
+                src: 'loadDoc',
+                input: ({ context }) => ({ fileUri: context.fileUri }),
+                onDone: {
+                  target: 'done',
+                  actions: [
+                    ({ context, event }) => {
+                      context.strokesRef.current = event.output.strokes;
+                    },
+                    assign({
+                      loadedStrokes: ({ event }) => event.output.strokes,
+                    }),
+                  ],
+                },
+                onError: {
+                  target: '#note.error',
+                },
               },
-              assign({
-                loadedStrokes: ({ event }) => event.output.strokes,
-              }),
-            ],
+            },
+            done: {
+              type: 'final',
+            },
           },
-          {
-            // Canvas not ready yet — wait for it.
-            target: 'waitingForCanvas',
-            actions: [
-              ({ context, event }) => {
-                context.strokesRef.current = event.output.strokes;
+        },
+        canvas: {
+          initial: 'waiting',
+          states: {
+            waiting: {
+              on: {
+                CANVAS_READY: {
+                  target: 'ready',
+                },
               },
-              assign({
-                loadedStrokes: ({ event }) => event.output.strokes,
-              }),
-            ],
+            },
+            ready: {
+              type: 'final',
+            },
           },
-        ],
-        onError: {
-          target: 'error',
         },
       },
-      on: {
-        CANVAS_READY: {
-          actions: assign({ canvasReady: () => true }),
-        },
-      },
-    },
-
-    // SVG loaded but native canvas not ready yet. Wait for it.
-    waitingForCanvas: {
-      on: {
-        CANVAS_READY: {
-          target: 'restoring',
-          actions: assign({ canvasReady: () => true }),
-        },
+      onDone: {
+        target: 'restoring',
       },
     },
 
@@ -379,7 +368,20 @@ export const noteMachine = setup({
           target: 'editing',
         },
         onError: {
-          target: 'error',
+          // Canvas ref was null despite CANVAS_READY having fired — the
+          // surface may have been transiently destroyed. Wait for a new
+          // CANVAS_READY and retry instead of dead-ending in error.
+          target: 'waitingForCanvasRetry',
+        },
+      },
+    },
+
+    // Recovery state: restoring failed (canvas ref null). Wait for the
+    // native surface to signal readiness again, then retry restoring.
+    waitingForCanvasRetry: {
+      on: {
+        CANVAS_READY: {
+          target: 'restoring',
         },
       },
     },
@@ -445,7 +447,7 @@ export const noteMachine = setup({
             },
             APP_BACKGROUND: {
               target: '#note.saving',
-              actions: ['pauseDrawing', assign({ backgroundPending: () => true })],
+              actions: ['pauseDrawing'],
             },
           },
           after: {
@@ -457,62 +459,111 @@ export const noteMachine = setup({
 
         // App went to background. Raw drawing is paused — OnyxHelper
         // stays alive but the SDK no longer captures stylus input.
-        // If the SurfaceView surface is destroyed while here, Android
-        // fires surfaceDestroyed (nulls OnyxHelper) then surfaceCreated
-        // (fresh OnyxHelper + onReady), which arrives as CANVAS_READY.
+        // Compound state tracks whether the SurfaceView surface was
+        // destroyed and recreated (CANVAS_READY while backgrounded).
         backgrounded: {
+          initial: 'surfaceAlive',
+          states: {
+            surfaceAlive: {
+              on: {
+                CANVAS_READY: {
+                  target: 'surfaceRecreated',
+                },
+              },
+            },
+            surfaceRecreated: {},
+          },
           on: {
-            CANVAS_READY: {
-              actions: assign({ surfaceRecreated: () => true }),
-            },
-            APP_FOREGROUND: {
-              target: 'resuming',
-            },
+            APP_FOREGROUND: [
+              {
+                // Surface was destroyed and recreated — need startDrawing
+                // (fresh OnyxHelper) instead of resumeDrawing.
+                guard: 'isSurfaceRecreated',
+                target: 'resumingFresh',
+              },
+              {
+                target: 'resumingPaused',
+              },
+            ],
           },
         },
 
-        // Redraw bitmap from strokesRef and re-establish raw drawing.
-        // Branches on surfaceRecreated: startDrawing (fresh helper)
-        // vs resumeDrawing (paused helper).
-        resuming: {
+        // Redraw bitmap from strokesRef and open raw drawing from scratch.
+        // Used when the SurfaceView surface was destroyed and recreated
+        // while backgrounded (fresh OnyxHelper, needs startDrawing).
+        resumingFresh: {
           invoke: {
             src: 'restoreCanvas',
             input: ({ context }) => ({
               canvasRef: context.canvasRef,
               strokes: context.strokesRef.current,
-              surfaceRecreated: context.surfaceRecreated,
+              surfaceRecreated: true,
             }),
             onDone: {
               target: 'clean',
-              actions: assign({
-                surfaceRecreated: () => false,
-                backgroundPending: () => false,
-              }),
             },
             onError: {
               // Best-effort — go to clean so the user can at least close.
               target: 'clean',
-              actions: assign({
-                surfaceRecreated: () => false,
-                backgroundPending: () => false,
-              }),
             },
           },
-          // Edge case: surface recreated WHILE restoreCanvas is running
-          // (e.g. rapid background/foreground cycling). The invoke will
-          // fail because the canvas ref points at a stale surface.
-          // CANVAS_READY marks that a fresh surface exists, so the next
-          // attempt (via onError → clean → user draws → …) works.
           on: {
+            // Surface destroyed again during restore — restart with the
+            // fresh surface (re-enter restarts the invoke).
             CANVAS_READY: {
-              actions: assign({ surfaceRecreated: () => true }),
+              target: 'resumingFresh',
+              reenter: true,
+            },
+          },
+        },
+
+        // Redraw bitmap from strokesRef and resume paused raw drawing.
+        // Used when the SurfaceView surface survived backgrounding
+        // (OnyxHelper still alive, needs resumeDrawing).
+        resumingPaused: {
+          invoke: {
+            src: 'restoreCanvas',
+            input: ({ context }) => ({
+              canvasRef: context.canvasRef,
+              strokes: context.strokesRef.current,
+              surfaceRecreated: false,
+            }),
+            onDone: {
+              target: 'clean',
+            },
+            onError: {
+              // Best-effort — go to clean so the user can at least close.
+              target: 'clean',
+            },
+          },
+          on: {
+            // Surface was destroyed during resume — the paused OnyxHelper
+            // is stale. Transition to resumingFresh (restarts the invoke
+            // with startDrawing path).
+            CANVAS_READY: {
+              target: 'resumingFresh',
             },
           },
         },
       },
     },
 
+    // Compound state: tracks whether APP_BACKGROUND arrived during save.
+    // The invoke lives on the parent so it runs regardless of child state.
+    // Child state determines the onDone/onError target via stateIn guard.
     saving: {
+      initial: 'foreground',
+      states: {
+        foreground: {
+          on: {
+            APP_BACKGROUND: {
+              target: 'backgrounding',
+              actions: 'pauseDrawing',
+            },
+          },
+        },
+        backgrounding: {},
+      },
       on: {
         // Strokes arriving mid-save cancel the in-flight save (exiting
         // the state stops the invoke) and go back to dirty, where the
@@ -524,9 +575,6 @@ export const noteMachine = setup({
         ERASE_END: {
           target: 'editing.dirty',
           actions: 'eraseStrokes',
-        },
-        APP_BACKGROUND: {
-          actions: ['pauseDrawing', assign({ backgroundPending: () => true })],
         },
       },
       invoke: {
@@ -541,11 +589,10 @@ export const noteMachine = setup({
         }),
         onDone: [
           {
-            guard: 'isBackgroundPending',
+            guard: 'isBackgrounding',
             target: 'editing.backgrounded',
             actions: assign({
               fileUri: ({ event }) => event.output.fileUri,
-              backgroundPending: () => false,
             }),
           },
           {
@@ -557,9 +604,8 @@ export const noteMachine = setup({
         ],
         onError: [
           {
-            guard: 'isBackgroundPending',
+            guard: 'isBackgrounding',
             target: 'editing.backgrounded',
-            actions: assign({ backgroundPending: () => false }),
           },
           {
             target: 'editing.dirty',
