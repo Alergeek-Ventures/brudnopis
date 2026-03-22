@@ -1,7 +1,5 @@
 const {
   withProjectBuildGradle,
-  withAppBuildGradle,
-  withMainApplication,
   withMainActivity,
   withAndroidManifest,
 } = require('expo/config-plugins');
@@ -10,12 +8,8 @@ const {
  * Expo config plugin for Onyx Boox SDK support.
  *
  * 1. Adds the Boox Maven repo to allprojects.repositories
- * 2. Adds HiddenApiBypass dependency to app/build.gradle
- * 3. Calls HiddenApiBypass.addHiddenApiExemptions("") in MainApplication.onCreate()
- *    to bypass Android linker namespace restrictions that block loading
- *    /system/lib64/libonyx_pen_touch_reader.so
- * 4. Declares <uses-native-library> in AndroidManifest.xml (belt-and-suspenders)
- * 5. Fixes Boox per-app DPI override in MainActivity.onCreate().
+ * 2. Declares <uses-native-library> in AndroidManifest.xml (belt-and-suspenders)
+ * 3. Fixes Boox per-app DPI override in MainActivity.onCreate().
  *    Boox firmware silently inflates densityDpi for third-party apps (e.g. 300→450).
  *    PixelUtil.toDIPFromPixel() reads DisplayMetricsHolder.getScreenDisplayMetrics()
  *    which stores the physical density (1.875) from Display.getRealMetrics().
@@ -23,6 +17,11 @@ const {
  *    resulting in 1860px / 1.875 = 992dp instead of the correct 661dp.
  *    Fix: after super.onCreate() (which triggers ReactRootView + initDisplayMetrics),
  *    copy windowDisplayMetrics.density into screenDisplayMetrics.density.
+ *
+ * Note: HiddenApiBypass was removed because Google Play flags it as an
+ * "unsupported API bypass SDK" incompatible with Android 16's ART runtime.
+ * The native .so is bundled in jniLibs/ (no linker namespace bypass needed),
+ * and Boox firmware disables hidden API enforcement for its own SDK classes.
  */
 
 function withBooxMavenRepo(config) {
@@ -35,41 +34,6 @@ function withBooxMavenRepo(config) {
         /allprojects\s*\{[\s\S]*?repositories\s*\{/,
         (match) => `${match}\n${booxRepo}`,
       );
-    }
-    return config;
-  });
-}
-
-function withHiddenApiBypassDep(config) {
-  return withAppBuildGradle(config, (config) => {
-    const buildGradle = config.modResults.contents;
-
-    if (!buildGradle.includes('hiddenapibypass')) {
-      config.modResults.contents = buildGradle.replace(
-        /dependencies\s*\{/,
-        `dependencies {\n    // Fix for Onyx Boox SDK: bypass linker namespace restrictions\n    implementation 'org.lsposed.hiddenapibypass:hiddenapibypass:6.1'`,
-      );
-    }
-    return config;
-  });
-}
-
-function withHiddenApiBypassInit(config) {
-  return withMainApplication(config, (config) => {
-    let contents = config.modResults.contents;
-
-    if (!contents.includes('HiddenApiBypass')) {
-      contents = contents.replace(
-        /^(import .+\n)(?!import)/m,
-        `$1import android.os.Build\nimport org.lsposed.hiddenapibypass.HiddenApiBypass\n`,
-      );
-
-      contents = contents.replace(
-        /super\.onCreate\(\)/,
-        `// Onyx Boox SDK: bypass linker namespace restrictions for libonyx_pen_touch_reader.so\n    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {\n      HiddenApiBypass.addHiddenApiExemptions("")\n    }\n    super.onCreate()`,
-      );
-
-      config.modResults.contents = contents;
     }
     return config;
   });
@@ -161,8 +125,6 @@ function withBooxNativeLibrary(config) {
 
 const withBooxSdk = (config) => {
   config = withBooxMavenRepo(config);
-  config = withHiddenApiBypassDep(config);
-  config = withHiddenApiBypassInit(config);
   config = withBooxNativeLibrary(config);
   config = withBooxDensityFix(config);
   return config;
