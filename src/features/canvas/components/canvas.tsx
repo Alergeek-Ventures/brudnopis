@@ -11,7 +11,6 @@ import { useAtom, useAtomValue } from 'jotai';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  AppState,
   BackHandler,
   type LayoutChangeEvent,
   Pressable,
@@ -84,22 +83,6 @@ function CanvasContent({
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
       send({ type: 'CLOSE_NOTE' });
       return true;
-    });
-    return () => subscription.remove();
-  }, [send]);
-
-  // Restore canvas content after returning from background (notification,
-  // app switch, etc.). The Onyx SDK raw drawing surface loses its rendered
-  // bitmap when Android's compositor takes over. The XState machine
-  // orchestrates pausing on background and re-rendering from strokesRef
-  // on foreground — no disk read needed.
-  useEffect(() => {
-    const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'background') {
-        send({ type: 'APP_BACKGROUND' });
-      } else if (state === 'active') {
-        send({ type: 'APP_FOREGROUND' });
-      }
     });
     return () => subscription.remove();
   }, [send]);

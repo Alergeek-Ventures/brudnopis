@@ -1,7 +1,8 @@
 import type { DrawingCanvasRef, NativeStrokeData } from 'drawing-canvas';
 import { refreshScreen } from 'drawing-canvas';
 import type { MutableRefObject } from 'react';
-import { type ActorRefFrom, assign, fromPromise, setup, stateIn } from 'xstate';
+import { AppState, type AppStateStatus } from 'react-native';
+import { type ActorRefFrom, assign, fromCallback, fromPromise, setup, stateIn } from 'xstate';
 import { createDocument, loadDocument, saveDocument } from '@/features/storage/utilities/storage';
 import type { BackgroundPattern, Stroke, StrokeStyle } from '@/features/svg/types';
 import { decodePoints, encodePoints } from '@/features/svg/utilities/points';
@@ -126,13 +127,14 @@ const einkRefresh = fromPromise(async () => {
 /**
  * Restore canvas after returning from background.
  *
- * Always redraws the bitmap from strokesRef (the e-ink panel may show
- * stale content after Android's compositor ran while backgrounded).
- *
  * Two paths based on whether the SurfaceView surface was destroyed:
- * - Surface survived: OnyxHelper still alive, was paused → resumeDrawing.
- * - Surface recreated: surfaceCreated already inited a fresh OnyxHelper
- *   and fired onReady → startDrawing (opens raw drawing from scratch).
+ * - Surface survived (e.g. notification shade): bitmap is intact, so we
+ *   skip the expensive loadStrokes redraw. A pauseDrawing + resumeDrawing
+ *   toggle kicks the Onyx SDK back to life (same mechanism as toolbar
+ *   expand/collapse). This eliminates the visible flash.
+ * - Surface recreated (e.g. full app switch): bitmap is gone, so we
+ *   redraw from strokesRef via loadStrokes, then open raw drawing from
+ *   scratch with startDrawing (fresh OnyxHelper).
  */
 const restoreCanvas = fromPromise(
   async ({
@@ -151,23 +153,70 @@ const restoreCanvas = fromPromise(
       `[note:restoreCanvas] strokes=${input.strokes.length} surfaceRecreated=${input.surfaceRecreated}`,
     );
 
-    if (input.strokes.length > 0) {
-      const nativeStrokes: NativeStrokeData[] = input.strokes.map((s) => ({
-        points: encodePoints(s.points),
-        color: s.color,
-        width: s.width,
-        ...(s.style && { style: s.style }),
-      }));
-      await canvas.loadStrokes(nativeStrokes);
-    }
-
     if (input.surfaceRecreated) {
+      // Surface was destroyed and recreated — the bitmap is gone.
+      // Full redraw from strokesRef, then open raw drawing from scratch.
+      if (input.strokes.length > 0) {
+        const nativeStrokes: NativeStrokeData[] = input.strokes.map((s) => ({
+          points: encodePoints(s.points),
+          color: s.color,
+          width: s.width,
+          ...(s.style && { style: s.style }),
+        }));
+        await canvas.loadStrokes(nativeStrokes);
+      }
       await canvas.startDrawing();
     } else {
+      // Surface survived (e.g. notification shade) — the bitmap is intact.
+      // Toggle raw drawing off/on to restore the Onyx SDK input pipeline.
+      // Same mechanism as toolbar expand/collapse, which is known to work.
+      await canvas.pauseDrawing();
       await canvas.resumeDrawing();
     }
   },
 );
+
+/**
+ * Subscribe to React Native AppState changes and forward them as machine events.
+ *
+ * On Android, pulling down the notification shade triggers 'inactive' (not
+ * 'background'), so both are treated as interruptions that require a
+ * pause + restore cycle.
+ *
+ * Invoked at the root level — the subscription is active for the machine's
+ * entire lifetime. States that don't handle APP_BACKGROUND / APP_FOREGROUND
+ * silently ignore them.
+ */
+const appStateListener = fromCallback(({ sendBack }) => {
+  // 'change' fires for full app switches (background/active) and on iOS for
+  // inactive transitions. On Boox Android devices the notification shade does
+  // NOT trigger 'change' — only 'blur'/'focus' fire.
+  const changeSub = AppState.addEventListener('change', (state: AppStateStatus) => {
+    if (state === 'background' || state === 'inactive') {
+      sendBack({ type: 'APP_BACKGROUND' });
+    } else if (state === 'active') {
+      sendBack({ type: 'APP_FOREGROUND' });
+    }
+  });
+
+  // Android-only: 'blur'/'focus' fire when the window loses/gains focus,
+  // which includes the notification shade, permission dialogs, and split-
+  // screen. These complement 'change' for cases it misses. Duplicate events
+  // are harmless — the XState machine silently drops events that have no
+  // transition in the current state.
+  const blurSub = AppState.addEventListener('blur', () => {
+    sendBack({ type: 'APP_BACKGROUND' });
+  });
+  const focusSub = AppState.addEventListener('focus', () => {
+    sendBack({ type: 'APP_FOREGROUND' });
+  });
+
+  return () => {
+    changeSub.remove();
+    blurSub.remove();
+    focusSub.remove();
+  };
+});
 
 // ── Machine ────────────────────────────────────────────────────
 
@@ -195,6 +244,7 @@ export const noteMachine = setup({
       | { type: 'APP_FOREGROUND' },
   },
   actors: {
+    appStateListener,
     loadDoc,
     restoreAndStart,
     restoreCanvas,
@@ -266,6 +316,10 @@ export const noteMachine = setup({
   },
 }).createMachine({
   id: 'note',
+
+  invoke: {
+    src: 'appStateListener',
+  },
 
   // Placeholder context — overwritten by OPEN_NOTE's assignOpenNote action
   // before the machine leaves idle. Refs are initialized lazily; the idle
