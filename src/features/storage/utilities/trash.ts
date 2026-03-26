@@ -5,6 +5,7 @@ import {
   deleteDocument,
   emptyTrashFolder,
   getSavedFolderUri,
+  loadDocument,
   moveDocumentFromTrash,
   moveDocumentToTrash,
 } from './storage';
@@ -68,6 +69,26 @@ export async function restoreDocument(trashFileUri: string, filename: string): P
  */
 export async function readTrashedDocs(): Promise<TrashedDocument[]> {
   return readTrashedMeta();
+}
+
+/**
+ * Read trashed documents with SVG content for thumbnail rendering.
+ * Reads each file in parallel; failures are silently ignored (svgContent stays undefined).
+ */
+export async function readTrashedDocsWithContent(): Promise<TrashedDocument[]> {
+  const docs = await readTrashedMeta();
+
+  await Promise.all(
+    docs.map(async (doc) => {
+      try {
+        doc.svgContent = await loadDocument(doc.uri);
+      } catch (err) {
+        console.error('Failed to read trashed document:', doc.uri, err);
+      }
+    }),
+  );
+
+  return docs;
 }
 
 /**
