@@ -7,11 +7,10 @@ import android.graphics.Rect
 import android.view.SurfaceView
 import com.onyx.android.sdk.api.device.epd.EpdController
 import com.onyx.android.sdk.data.note.TouchPoint
+import com.onyx.android.sdk.pen.NeoFountainPenWrapper
 import com.onyx.android.sdk.pen.RawInputCallback
 import com.onyx.android.sdk.pen.TouchHelper
 import com.onyx.android.sdk.pen.data.TouchPointList
-import kotlin.math.max
-import kotlin.math.min
 
 /**
  * Isolates all Onyx SDK type references into a separate class.
@@ -201,52 +200,18 @@ class OnyxHelper(
             else -> TouchHelper.STROKE_STYLE_PENCIL
         }
 
-        /** Minimum stroke width for fountain pen at zero pressure. */
-        private const val MIN_FOUNTAIN_PEN_WIDTH = 1.0f
-
         /**
-         * Smoothing factor for the exponential moving average on stroke width.
-         * Lower = smoother (more lag), higher = more responsive.
-         * 0.3 provides a good balance: responsive to intentional pressure
-         * changes but smooths out digitizer noise.
-         */
-        private const val WIDTH_SMOOTHING = 0.3f
-
-        /**
-         * Pressure curve exponent. Applied as `norm^PRESSURE_CURVE` to the
-         * 0.0–1.0 normalized pressure before mapping to width.
+         * Render fountain pen strokes using the SDK's NeoFountainPenWrapper.
          *
-         * < 1.0 = concave curve: boosts mid-range pressure → thicker strokes
-         *         at moderate pressure. Matches the EPD hardware preview which
-         *         is slightly more generous than a linear mapping.
-         * = 1.0 = linear (no curve).
-         * > 1.0 = convex curve: attenuates mid-range → thinner strokes.
-         */
-        private const val PRESSURE_CURVE = 0.7f
-
-        /**
-         * Render fountain pen strokes with pressure-variable width.
-         *
-         * Custom renderer that replaces NeoFountainPenWrapper.drawStroke().
-         * The SDK's wrapper uses NeoFountainPen (a black-box class on the
-         * device) whose pressure-to-width curve doesn't match the EPD
-         * hardware preview. This renderer uses a direct linear mapping with
-         * exponential smoothing, producing output that closely matches what
-         * the user sees while drawing on the e-ink layer.
-         *
-         * Algorithm:
-         * 1. Normalize raw pressure (0–maxTouchPressure) → (0.0–1.0)
-         * 2. Apply concave power curve (norm^0.7) to boost mid-range widths
-         * 3. Map to width: minWidth + curved * (maxWidth - minWidth)
-         * 4. Smooth width with EMA to avoid jagged transitions
-         * 5. Draw per-segment lines with FILL_AND_STROKE + Cap.ROUND
-         *    (same technique as SDK's PenUtils.drawStrokeByPointSize)
+         * This delegates to the same pressure-to-width algorithm that the SDK
+         * uses for the live e-ink hardware preview, ensuring the bitmap
+         * matches what the user saw while drawing.
          *
          * @param canvas    The bitmap canvas to draw on.
-         * @param paint     Paint with the desired color (will be temporarily modified).
+         * @param paint     Paint with the desired color.
          * @param points    List of [x, y, pressure, timestamp] float arrays.
          *                  Pressure is raw from the digitizer (0–maxTouchPressure).
-         * @param baseWidth The configured stroke width — used as maxWidth.
+         * @param baseWidth The configured stroke width.
          */
         fun renderFountainPen(canvas: Canvas, paint: Paint, points: List<FloatArray>, baseWidth: Float) {
             if (points.size < 2) return
@@ -254,52 +219,16 @@ class OnyxHelper(
             val rawMax = EpdController.getMaxTouchPressure()
             val maxTouchPressure = if (rawMax > 0f) rawMax else EpdController.MAX_TOUCH_PRESSURE
 
-            // DEBUG: log pressure values entering the fountain pen renderer
-            val pressureSample = points.take(5).joinToString { String.format("%.4f", it[2]) }
-            android.util.Log.d("DrawingCanvas", "renderFountainPen: ${points.size} pts, baseWidth=$baseWidth, maxTouchPressure=$maxTouchPressure, raw pressures=[$pressureSample]")
-
-            // Save original paint state
-            val origStyle = paint.style
-            val origCap = paint.strokeCap
-            val origJoin = paint.strokeJoin
-            val origAntiAlias = paint.isAntiAlias
-            val origWidth = paint.strokeWidth
-
-            // Configure paint to match PenUtils.drawStrokeByPointSize behavior
-            paint.style = Paint.Style.FILL_AND_STROKE
-            paint.strokeCap = Paint.Cap.ROUND
-            paint.strokeJoin = Paint.Join.ROUND
-            paint.isAntiAlias = true
-
-            val widthRange = baseWidth - MIN_FOUNTAIN_PEN_WIDTH
-
-            // Initialize smoothed width from first point's pressure
-            val firstNorm = Math.pow(min(1f, max(0f, points[0][2] / maxTouchPressure)).toDouble(), PRESSURE_CURVE.toDouble()).toFloat()
-            var smoothedWidth = MIN_FOUNTAIN_PEN_WIDTH + firstNorm * widthRange
-
-            for (i in 0 until points.size - 1) {
-                val p0 = points[i]
-                val p1 = points[i + 1]
-
-                // Normalize pressure of the target point to 0.0–1.0, then
-                // apply concave power curve to boost mid-range widths.
-                val linear = min(1f, max(0f, p1[2] / maxTouchPressure))
-                val norm = Math.pow(linear.toDouble(), PRESSURE_CURVE.toDouble()).toFloat()
-                val targetWidth = MIN_FOUNTAIN_PEN_WIDTH + norm * widthRange
-
-                // Smooth with exponential moving average
-                smoothedWidth += (targetWidth - smoothedWidth) * WIDTH_SMOOTHING
-
-                paint.strokeWidth = smoothedWidth
-                canvas.drawLine(p0[0], p0[1], p1[0], p1[1], paint)
+            // Convert FloatArray points to SDK TouchPoint objects
+            val touchPoints = points.map { p ->
+                TouchPoint(p[0], p[1], p[2], 0f, p[3].toLong())
             }
 
-            // Restore paint state
-            paint.style = origStyle
-            paint.strokeCap = origCap
-            paint.strokeJoin = origJoin
-            paint.isAntiAlias = origAntiAlias
-            paint.strokeWidth = origWidth
+            // displayScale = 1.0 since we draw in native pixel coordinates
+            NeoFountainPenWrapper.drawStroke(
+                canvas, paint, touchPoints,
+                1.0f, baseWidth, maxTouchPressure, false,
+            )
         }
     }
 }
