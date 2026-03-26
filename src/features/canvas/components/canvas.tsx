@@ -201,8 +201,6 @@ function CanvasContent({
         onStrokeEnd={handleStrokeEnd}
         onEraseEnd={handleEraseEnd}
       />
-      {/* Toolbar renders after canvas so it sits on top in Android's
-          native view hierarchy. SurfaceView ignores CSS z-index. */}
       {isClosing ? (
         <View className="absolute inset-0 items-center justify-center bg-white/80">
           <ActivityIndicator size="large" color="#333" />
@@ -210,12 +208,9 @@ function CanvasContent({
         </View>
       ) : (
         <>
-          {/* Tap-outside-to-close: transparent overlay behind toolbar (z-10 < z-20).
-              Captures both finger and pen taps when the toolbar is expanded.
-              Only rendered while expanded — drawing is paused so touches propagate. */}
-          {toolbarExpanded && (
+          {toolbarExpanded ? (
             <Pressable className="absolute inset-0 z-10" onPress={handleDismissToolbar} />
-          )}
+          ) : null}
           <Toolbar
             expanded={toolbarExpanded}
             onClose={handleClose}

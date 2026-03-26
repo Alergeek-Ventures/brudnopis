@@ -183,9 +183,14 @@ class OnyxHelper(
 
     fun close() {
         try {
+            android.util.Log.i("DrawingCanvas", "OnyxHelper.close: disabling raw drawing")
             touchHelper.setRawDrawingEnabled(false)
+            android.util.Log.i("DrawingCanvas", "OnyxHelper.close: calling closeRawDrawing")
             touchHelper.closeRawDrawing()
-        } catch (_: Throwable) {}
+            android.util.Log.i("DrawingCanvas", "OnyxHelper.close: done — screen should unfreeze")
+        } catch (e: Throwable) {
+            android.util.Log.e("DrawingCanvas", "OnyxHelper.close FAILED: ${e.javaClass.name}: ${e.message}", e)
+        }
     }
 
     companion object {

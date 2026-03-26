@@ -20,7 +20,24 @@ class DrawingCanvasModule : Module() {
                 val activity: Activity = appContext.currentActivity
                     ?: throw IllegalStateException("No current activity")
                 val rootView = activity.window.decorView
-                EpdController.invalidate(rootView, UpdateMode.GC)
+                // EpdController.invalidate calls View.invalidate internally,
+                // which MUST run on the UI thread. Module-level AsyncFunctions
+                // run on the background AsyncFunctionQueue by default.
+                activity.runOnUiThread {
+                    try {
+                        // Force the entire view hierarchy to redraw — ensures
+                        // the e-ink panel receives fresh content after raw
+                        // drawing mode unfreezes.
+                        rootView.invalidate()
+                        rootView.requestLayout()
+                        // repaintEveryThing forces a full GC waveform refresh
+                        // across the entire screen, not just the passed view.
+                        EpdController.repaintEveryThing(UpdateMode.GC)
+                        android.util.Log.i("DrawingCanvas", "refreshScreen: repaintEveryThing(GC) on UI thread")
+                    } catch (e: Throwable) {
+                        android.util.Log.w("DrawingCanvas", "refreshScreen (UI thread) failed: ${e.message}", e)
+                    }
+                }
             } catch (e: Throwable) {
                 android.util.Log.w("DrawingCanvas", "refreshScreen failed: ${e.message}")
             }

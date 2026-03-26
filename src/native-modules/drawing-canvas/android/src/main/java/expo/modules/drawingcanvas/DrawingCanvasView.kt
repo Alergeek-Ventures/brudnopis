@@ -273,9 +273,10 @@ class DrawingCanvasView(
      * Called by the JS-side XState machine before navigating away.
      */
     fun stopDrawing() {
+        android.util.Log.i("DrawingCanvas", "stopDrawing: ENTERED")
         drawBitmapToSurface()
         closeTouchHelper()
-        android.util.Log.i("DrawingCanvas", "Raw drawing stopped")
+        android.util.Log.i("DrawingCanvas", "stopDrawing: DONE")
     }
 
     /**
@@ -288,10 +289,12 @@ class DrawingCanvasView(
      */
     fun pauseDrawing() {
         try {
-            drawBitmapToSurface()
             val helper = onyxHelper as? OnyxHelper ?: return
+            // Blit current bitmap to the SurfaceView BEFORE disabling raw drawing
+            // so strokes remain visible when the e-ink screen unfreezes.
+            drawBitmapToSurface()
             helper.setRawDrawingEnabled(false)
-            android.util.Log.i("DrawingCanvas", "Raw drawing paused")
+            android.util.Log.i("DrawingCanvas", "Raw drawing paused (with blit)")
         } catch (e: Throwable) {
             android.util.Log.w("DrawingCanvas", "pauseDrawing failed: ${e.message}")
         }
@@ -637,8 +640,10 @@ class DrawingCanvasView(
     }
 
     private fun closeTouchHelper() {
+        val helper = onyxHelper as? OnyxHelper
+        android.util.Log.i("DrawingCanvas", "closeTouchHelper: helper=${if (helper != null) "present" else "NULL"}")
         try {
-            (onyxHelper as? OnyxHelper)?.close()
+            helper?.close()
         } catch (_: Throwable) {}
         onyxHelper = null
     }
@@ -819,10 +824,12 @@ class DrawingCanvasView(
     }
 
     fun cleanup() {
+        android.util.Log.i("DrawingCanvas", "cleanup: ENTERED")
         closeTouchHelper()
         strokes.clear()
         bitmap?.recycle()
         bitmap = null
         bitmapCanvas = null
+        android.util.Log.i("DrawingCanvas", "cleanup: DONE")
     }
 }

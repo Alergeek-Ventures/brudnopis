@@ -75,6 +75,17 @@ function getWidthPresets(style: StrokeStyle) {
 
 // ── Component ──────────────────────────────────────────────────
 
+/**
+ * Canvas toolbar — tool selection, color picker, width picker.
+ *
+ * FABRIC WORKAROUND: React Native's Fabric renderer on Android never updates
+ * a native view's bounds after first mount when the view grows. The toolbar
+ * always renders the full expanded layout so Fabric allocates maximum bounds
+ * on first mount. When "collapsed", the collapsed pill is absolutely
+ * positioned at top-right inside the same fixed-size container, and the
+ * expanded rows become invisible (opacity 0, pointerEvents none). The native
+ * view bounds never change.
+ */
 export function Toolbar({ expanded, onClose, onToggleExpand, onLayout }: ToolbarProps) {
   const [persisted, setPersisted] = useAtom(penSettingsAtom);
   const {
@@ -116,12 +127,21 @@ export function Toolbar({ expanded, onClose, onToggleExpand, onLayout }: Toolbar
   const currentStyle = activeTool === 'eraser' ? lastPenStyle : activeTool;
   const currentSettings = penSettings[currentStyle];
   const widthPresets = getWidthPresets(currentStyle);
+  const ActiveIcon = TOOL_ICONS[activeTool];
 
-  // ── Render: Expanded ───────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────
+  // The expanded layout is ALWAYS rendered to keep native bounds constant.
+  // When collapsed, the expanded content becomes invisible and a pill overlay
+  // appears at the top-right.
 
-  if (expanded) {
-    return (
-      <View className="absolute right-0 top-0 z-20 pt-safe pr-safe" onLayout={onLayout}>
+  return (
+    <View className="absolute right-0 top-0 z-20 mr-2 mt-2 pt-safe pr-safe" onLayout={onLayout}>
+      {/* Expanded content — always in tree for constant native bounds.
+          Invisible + non-interactive when collapsed. */}
+      <View
+        style={expanded ? undefined : { opacity: 0 }}
+        pointerEvents={expanded ? 'auto' : 'none'}
+      >
         <View className="rounded-lg border border-gray-300 bg-white">
           {/* Row 1: Tool buttons + collapse toggle */}
           <View className="flex-row items-center border-b border-gray-300 px-2 py-1.5">
@@ -196,32 +216,27 @@ export function Toolbar({ expanded, onClose, onToggleExpand, onLayout }: Toolbar
           </View>
         </View>
       </View>
-    );
-  }
 
-  // ── Render: Collapsed (fixed pill) ──────────────────────────
-
-  return (
-    <View className="absolute right-0 top-0 z-20 pt-safe pr-safe" onLayout={onLayout}>
-      <View className="flex-row items-center rounded-lg border border-gray-300 bg-white">
-        <Pressable
-          onPress={onClose}
-          className="rounded-l-lg border-r border-gray-300 p-3 active:bg-gray-200"
-        >
-          <X size={20} color="black" />
-        </Pressable>
-        <Pressable onPress={onToggleExpand} className="rounded-r-lg p-3 active:bg-gray-200">
-          {(() => {
-            const ActiveIcon = TOOL_ICONS[activeTool];
-            return (
+      {/* Collapsed pill — absolutely positioned over the invisible expanded
+          layout. Only visible when collapsed. */}
+      {!expanded ? (
+        <View className="absolute right-0 top-0 mr-2 mt-2 pr-safe pt-safe">
+          <View className="flex-row items-center rounded-lg border border-gray-300 bg-white">
+            <Pressable
+              onPress={onClose}
+              className="rounded-l-lg border-r border-gray-300 p-3 active:bg-gray-200"
+            >
+              <X size={20} color="black" />
+            </Pressable>
+            <Pressable onPress={onToggleExpand} className="rounded-r-lg p-3 active:bg-gray-200">
               <ActiveIcon
                 size={20}
                 color={activeTool === 'eraser' ? '#888' : currentSettings.color}
               />
-            );
-          })()}
-        </Pressable>
-      </View>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
     </View>
   );
 }
