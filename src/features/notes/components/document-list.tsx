@@ -67,7 +67,6 @@ function useDocumentList() {
   return {
     documents,
     isLoading: folderQuery.isLoading || documentsQuery.isLoading,
-    isRefetching: documentsQuery.isRefetching,
     shouldRedirectNoFolder,
     shouldRedirectError,
     handleNewDocument,
@@ -79,13 +78,11 @@ const THUMBNAIL_ASPECT_RATIO = CANVAS_WIDTH / CANVAS_HEIGHT;
 
 function NoteCard({
   item,
-  loading,
   selected,
   onPress,
   onLongPress,
 }: {
   item: DocumentInfo;
-  loading?: boolean;
   selected?: boolean;
   onPress: () => void;
   onLongPress: () => void;
@@ -98,11 +95,7 @@ function NoteCard({
         }`}
       >
         <View style={{ aspectRatio: THUMBNAIL_ASPECT_RATIO }}>
-          {loading ? (
-            <View className="flex-1 items-center justify-center bg-gray-100">
-              <Text className="text-sm text-gray-600">Loading...</Text>
-            </View>
-          ) : item.svgContent ? (
+          {item.svgContent ? (
             <NoteThumbnail svgContent={item.svgContent} />
           ) : (
             <View className="flex-1 items-center justify-center bg-gray-100">
@@ -149,7 +142,6 @@ export function DocumentList() {
   const {
     documents,
     isLoading,
-    isRefetching,
     shouldRedirectNoFolder,
     shouldRedirectError,
     handleNewDocument,
@@ -213,7 +205,6 @@ export function DocumentList() {
     return (
       <NoteCard
         item={item}
-        loading={isRefetching}
         selected={isSelecting ? selectedUris.has(item.uri) : undefined}
         onPress={() => handleCardPress(item)}
         onLongPress={() => handleCardLongPress(item)}
