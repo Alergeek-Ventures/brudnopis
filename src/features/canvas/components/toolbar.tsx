@@ -1,6 +1,6 @@
 import { useAtom } from 'jotai';
 import type { IconProps } from 'phosphor-react-native';
-import { CaretRight, Eraser, Highlighter, Pen, PenNib, X } from 'phosphor-react-native';
+import { CaretRight, Eraser, FilePlus, Highlighter, Pen, PenNib, X } from 'phosphor-react-native';
 import type { ComponentType } from 'react';
 import { type LayoutChangeEvent, Pressable, View } from 'react-native';
 
@@ -18,6 +18,8 @@ type ToolbarProps = {
   /** Whether the toolbar is currently expanded (controlled by parent). */
   expanded: boolean;
   onClose: () => void;
+  onNewNote: () => void;
+  newNoteDisabled: boolean;
   /** Toggle between collapsed and expanded. */
   onToggleExpand: () => void;
   /** Reports the toolbar's on-screen bounds for SDK exclude-rect calculation. */
@@ -86,7 +88,14 @@ function getWidthPresets(style: StrokeStyle) {
  * expanded rows become invisible (opacity 0, pointerEvents none). The native
  * view bounds never change.
  */
-export function Toolbar({ expanded, onClose, onToggleExpand, onLayout }: ToolbarProps) {
+export function Toolbar({
+  expanded,
+  onClose,
+  onNewNote,
+  newNoteDisabled,
+  onToggleExpand,
+  onLayout,
+}: ToolbarProps) {
   const [persisted, setPersisted] = useAtom(penSettingsAtom);
   const {
     activeTool = DEFAULT_PEN_SETTINGS.activeTool,
@@ -145,6 +154,24 @@ export function Toolbar({ expanded, onClose, onToggleExpand, onLayout }: Toolbar
         <View className="rounded-lg border border-gray-300 bg-white">
           {/* Row 1: Tool buttons + collapse toggle */}
           <View className="flex-row items-center border-b border-gray-300 px-2 py-1.5">
+            <Pressable
+              onPress={onClose}
+              accessibilityRole="button"
+              accessibilityLabel="Close note"
+              className="rounded-md p-2.5 active:bg-gray-200"
+            >
+              <X size={18} color="black" />
+            </Pressable>
+            <Pressable
+              onPress={onNewNote}
+              disabled={newNoteDisabled}
+              accessibilityRole="button"
+              accessibilityLabel="New note"
+              accessibilityState={{ disabled: newNoteDisabled }}
+              className="rounded-md p-2.5 active:bg-gray-200 disabled:opacity-40"
+            >
+              <FilePlus size={18} color="black" />
+            </Pressable>
             <View className="flex-1 flex-row items-center gap-1">
               {TOOLS.map(({ tool, Icon }) => (
                 <Pressable
@@ -224,11 +251,28 @@ export function Toolbar({ expanded, onClose, onToggleExpand, onLayout }: Toolbar
           <View className="flex-row items-center rounded-lg border border-gray-300 bg-white">
             <Pressable
               onPress={onClose}
+              accessibilityRole="button"
+              accessibilityLabel="Close note"
               className="rounded-l-lg border-r border-gray-300 p-3 active:bg-gray-200"
             >
               <X size={20} color="black" />
             </Pressable>
-            <Pressable onPress={onToggleExpand} className="rounded-r-lg p-3 active:bg-gray-200">
+            <Pressable
+              onPress={onNewNote}
+              disabled={newNoteDisabled}
+              accessibilityRole="button"
+              accessibilityLabel="New note"
+              accessibilityState={{ disabled: newNoteDisabled }}
+              className="border-r border-gray-300 p-3 active:bg-gray-200 disabled:opacity-40"
+            >
+              <FilePlus size={20} color="black" />
+            </Pressable>
+            <Pressable
+              onPress={onToggleExpand}
+              accessibilityRole="button"
+              accessibilityLabel="Expand toolbar"
+              className="rounded-r-lg p-3 active:bg-gray-200"
+            >
               <ActiveIcon
                 size={20}
                 color={activeTool === 'eraser' ? '#888' : currentSettings.color}

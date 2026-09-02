@@ -56,13 +56,15 @@ function CanvasContent({
 }) {
   const canvasRef = useRef<DrawingCanvasRef>(null);
   const strokesRef = useRef<Stroke[]>([]);
+  const [toolbarExpanded, setToolbarExpanded] = useState(false);
   const [snapshot, send] = useAtom(noteMachineAtom);
 
   // Show "Saving…" overlay once the note is closing. Derived directly from
   // the machine state — no child actor indirection needed.
+  const isSavingRequested = snapshot.matches('saving') && snapshot.context.pendingIntent !== null;
   const isClosing =
-    snapshot.matches('closingDirty') ||
-    snapshot.matches('flushing') ||
+    isSavingRequested ||
+    snapshot.matches('reset') ||
     snapshot.matches('stopping') ||
     snapshot.matches('navigating');
 
@@ -81,6 +83,7 @@ function CanvasContent({
   // declarative alternative exists in React Native.
   useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      setToolbarExpanded(false);
       send({ type: 'CLOSE_NOTE' });
       return true;
     });
@@ -131,7 +134,18 @@ function CanvasContent({
   };
 
   const handleClose = () => {
+    // Closing pauses drawing itself when persistence is required. Avoid a
+    // separate collapse event, which could resume drawing under the toolbar
+    // if persistence fails.
+    setToolbarExpanded(false);
     send({ type: 'CLOSE_NOTE' });
+  };
+
+  const handleNewNote = () => {
+    // Do not send TOOLBAR_COLLAPSED here: NEW_NOTE pauses drawing itself,
+    // and a second resume event would race the reset actor.
+    setToolbarExpanded(false);
+    send({ type: 'NEW_NOTE' });
   };
 
   // ── Toolbar bounds → excludeRects ──────────────────────────
@@ -150,8 +164,6 @@ function CanvasContent({
   // ── Toolbar expand / collapse → XState ─────────────────────
   // Pauses raw drawing when expanded (so color/width pickers get
   // touch events), resumes when collapsed.
-
-  const [toolbarExpanded, setToolbarExpanded] = useState(false);
 
   const handleToggleToolbar = () => {
     setToolbarExpanded((prev) => {
@@ -197,6 +209,10 @@ function CanvasContent({
           <Toolbar
             expanded={toolbarExpanded}
             onClose={handleClose}
+            onNewNote={handleNewNote}
+            newNoteDisabled={
+              !(snapshot.matches({ editing: 'clean' }) || snapshot.matches({ editing: 'dirty' }))
+            }
             onToggleExpand={handleToggleToolbar}
             onLayout={handleToolbarLayout}
           />

@@ -2,7 +2,7 @@ import type { DrawingCanvasRef, NativeStrokeData } from 'drawing-canvas';
 import { refreshScreen } from 'drawing-canvas';
 import type { MutableRefObject } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
-import { type ActorRefFrom, assign, fromCallback, fromPromise, setup, stateIn } from 'xstate';
+import { type ActorRefFrom, assign, fromCallback, fromPromise, setup } from 'xstate';
 import { createDocument, loadDocument, saveDocument } from '@/features/storage/utilities/storage';
 import type { BackgroundPattern, Stroke, StrokeStyle } from '@/features/svg/types';
 import { decodePoints, encodePoints } from '@/features/svg/utilities/points';
@@ -27,6 +27,19 @@ type NoteMachineContext = {
   canvasRef: MutableRefObject<DrawingCanvasRef | null>;
   /** Strokes parsed from SVG, held between loading and restoring states. */
   loadedStrokes: Stroke[];
+  /** Monotonically increasing generation of accepted edits. */
+  revision: number;
+  /** Snapshot and generation currently being written. */
+  writeStrokes: Stroke[];
+  writeRevision: number;
+  savedRevision: number;
+  pendingIntent: 'close' | 'new-note' | null;
+  intentPauseNeeded: boolean;
+  /** The one pause started for the current background/intent transition. */
+  pausePromise: Promise<void> | null;
+  currentBackgrounded: boolean;
+  foregroundRestoreNeeded: boolean;
+  surfaceRecreated: boolean;
 };
 
 // ── Actors (async operations) ──────────────────────────────────
@@ -76,39 +89,92 @@ const restoreAndStart = fromPromise(
   },
 );
 
-const serializeAndSave = fromPromise(
+const allocateDocument = fromPromise(
+  async ({ input }: { input: { folderUri: string | null } }): Promise<{ fileUri: string }> => {
+    if (!input.folderUri) throw new Error('folderUri is required to create a new document');
+    console.debug('[note:allocateDocument] allocating document');
+    const { uri } = await createDocument(input.folderUri);
+    return { fileUri: uri };
+  },
+);
+
+const saveSnapshot = fromPromise(
   async ({
     input,
   }: {
     input: {
-      fileUri: string | null;
-      folderUri: string | null;
-      strokesRef: MutableRefObject<Stroke[]>;
+      fileUri: string;
+      strokes: Stroke[];
       width: number;
       height: number;
       backgroundPattern: BackgroundPattern;
     };
   }): Promise<{ fileUri: string }> => {
-    console.debug(
-      `[note:serializeAndSave] strokes=${input.strokesRef.current.length} fileUri=${input.fileUri ?? '(new)'}`,
-    );
+    console.debug(`[note:saveSnapshot] strokes=${input.strokes.length} fileUri=${input.fileUri}`);
     const svg = serializeSvgDocument(
-      input.strokesRef.current,
+      input.strokes,
       input.width,
       input.height,
       input.backgroundPattern,
     );
+    await saveDocument(input.fileUri, svg);
+    return { fileUri: input.fileUri };
+  },
+);
 
-    if (input.fileUri) {
-      await saveDocument(input.fileUri, svg);
-      return { fileUri: input.fileUri };
+const resetCanvas = fromPromise(
+  async ({
+    input,
+    signal,
+  }: {
+    input: { canvasRef: MutableRefObject<DrawingCanvasRef | null> };
+    signal: AbortSignal;
+  }) => {
+    const canvas = input.canvasRef.current;
+    if (!canvas) throw new Error('Canvas ref is null during reset');
+    if (signal.aborted) throw new Error('Reset canceled');
+    await canvas.pauseDrawing();
+    if (signal.aborted) throw new Error('Reset canceled');
+    const currentCanvas = input.canvasRef.current;
+    if (!currentCanvas) throw new Error('Canvas ref is null during reset clear');
+    await currentCanvas.clear();
+  },
+);
+
+const pauseForIntent = fromPromise(
+  async ({
+    input,
+  }: {
+    input: {
+      canvasRef: MutableRefObject<DrawingCanvasRef | null>;
+      pausePromise: Promise<void> | null;
+    };
+  }) => {
+    if (input.pausePromise) {
+      await input.pausePromise;
+      return;
     }
+    const canvas = input.canvasRef.current;
+    if (!canvas) throw new Error('Canvas ref is null while pausing for intent');
+    await canvas.pauseDrawing();
+  },
+);
 
-    // New note — create the file on first save.
-    if (!input.folderUri) throw new Error('folderUri is required to create a new document');
-    const { uri } = await createDocument(input.folderUri);
-    await saveDocument(uri, svg);
-    return { fileUri: uri };
+const resumeAfterReset = fromPromise(
+  async ({
+    input,
+    signal,
+  }: {
+    input: { canvasRef: MutableRefObject<DrawingCanvasRef | null>; surfaceRecreated: boolean };
+    signal: AbortSignal;
+  }) => {
+    const canvas = input.canvasRef.current;
+    if (!canvas) throw new Error('Canvas ref is null while restoring reset');
+    if (signal.aborted) throw new Error('Restore canceled');
+    const currentCanvas = input.canvasRef.current;
+    if (!currentCanvas) throw new Error('Canvas ref is null while restoring reset');
+    if (input.surfaceRecreated) await currentCanvas.startDrawing();
+    else await currentCanvas.resumeDrawing();
   },
 );
 
@@ -116,7 +182,7 @@ const serializeAndSave = fromPromise(
  * Trigger a full e-ink refresh to clear ghosting from the drawing session.
  *
  * Raw drawing is already stopped by the `stopDrawing` entry action on
- * `closingDirty` / `stopping`, so we only need the GC waveform refresh here.
+ * `stopping`, so we only need the GC waveform refresh here.
  */
 const einkRefresh = fromPromise(async () => {
   console.debug('[note:einkRefresh] refreshing screen');
@@ -238,6 +304,7 @@ export const noteMachine = setup({
       | { type: 'ERASE_END'; indices: number[] }
       | { type: 'CANVAS_READY' }
       | { type: 'CLOSE_NOTE' }
+      | { type: 'NEW_NOTE' }
       | { type: 'TOOLBAR_EXPANDED' }
       | { type: 'TOOLBAR_COLLAPSED' }
       | { type: 'APP_BACKGROUND' }
@@ -248,14 +315,26 @@ export const noteMachine = setup({
     loadDoc,
     restoreAndStart,
     restoreCanvas,
-    serializeAndSave,
+    allocateDocument,
+    saveSnapshot,
+    resetCanvas,
+    pauseForIntent,
+    resumeAfterReset,
     einkRefresh,
     /** Provided at runtime: refetch document list then navigate back. */
     refetchAndNavigate: fromPromise(async () => {}),
   },
   guards: {
-    isBackgrounding: stateIn({ saving: 'backgrounding' }),
-    isSurfaceRecreated: stateIn({ editing: { backgrounded: 'surfaceRecreated' } }),
+    isCurrentlyBackgrounded: ({ context }) => context.currentBackgrounded,
+    needsForegroundRestore: ({ context }) => context.foregroundRestoreNeeded,
+    isSurfaceRecreated: ({ context }) => context.surfaceRecreated,
+    hasNewerRevision: ({ context }) => context.revision > context.writeRevision,
+    hasUnsavedChanges: ({ context }) =>
+      context.revision > context.savedRevision &&
+      (context.fileUri !== null || context.strokesRef.current.length > 0),
+    isPendingClose: ({ context }) => context.pendingIntent === 'close',
+    isBlankUnsaved: ({ context }) =>
+      context.fileUri === null && context.strokesRef.current.length === 0,
   },
   actions: {
     assignOpenNote: assign({
@@ -270,37 +349,44 @@ export const noteMachine = setup({
       canvasRef: ({ context, event }) =>
         event.type === 'OPEN_NOTE' ? event.canvasRef : context.canvasRef,
       loadedStrokes: () => [],
+      revision: () => 0,
+      writeStrokes: () => [],
+      writeRevision: () => 0,
+      savedRevision: () => 0,
+      pendingIntent: () => null,
+      intentPauseNeeded: () => false,
+      pausePromise: () => null,
+      currentBackgrounded: () => false,
+      foregroundRestoreNeeded: () => false,
+      surfaceRecreated: () => false,
     }),
-    // Violation: Imperative ref mutations bypass XState's assign semantics.
-    // Rationale: strokesRef mutates on every stylus stroke-end. Using assign
-    // would trigger snapshot updates and React re-renders for data that is
-    // only consumed during serialization (save). Refs keep drawing fast.
-    addStroke: ({ context, event }) => {
-      if (event.type !== 'STROKE_END') return;
+    recordStroke: assign(({ context, event }) => {
+      if (event.type !== 'STROKE_END') return {};
       const points = decodePoints(event.points);
-      if (points.length === 0) return;
+      if (points.length === 0) return {};
       context.strokesRef.current.push({
         points,
         color: event.color,
         width: event.width,
         ...(event.style && event.style !== 'pencil' && { style: event.style }),
       });
-      console.debug(
-        `[note:addStroke] +1 stroke (${points.length} pts), total=${context.strokesRef.current.length}`,
-      );
-    },
-    // Violation: Same as addStroke — imperative ref mutation for performance.
-    eraseStrokes: ({ context, event }) => {
-      if (event.type !== 'ERASE_END') return;
-      const indicesToRemove = new Set(event.indices);
+      return {
+        revision: context.revision + 1,
+        ...(context.pendingIntent !== null && { intentPauseNeeded: true }),
+      };
+    }),
+    recordErase: assign(({ context, event }) => {
+      if (event.type !== 'ERASE_END') return {};
+      const indices = new Set(event.indices);
       const before = context.strokesRef.current.length;
-      context.strokesRef.current = context.strokesRef.current.filter(
-        (_, i) => !indicesToRemove.has(i),
-      );
-      console.debug(
-        `[note:eraseStrokes] removed=${before - context.strokesRef.current.length}, total=${context.strokesRef.current.length}`,
-      );
-    },
+      const next = context.strokesRef.current.filter((_, index) => !indices.has(index));
+      const removed = before !== next.length;
+      if (removed) context.strokesRef.current = next;
+      return {
+        ...(removed && { revision: context.revision + 1 }),
+        ...(removed && context.pendingIntent !== null && { intentPauseNeeded: true }),
+      };
+    }),
     pauseDrawing: ({ context }) => {
       context.canvasRef.current?.pauseDrawing();
     },
@@ -312,6 +398,77 @@ export const noteMachine = setup({
     stopDrawing: ({ context }) => {
       console.debug('[note:stopDrawing] unfreezing screen for close overlay');
       context.canvasRef.current?.stopDrawing();
+    },
+    assignSnapshot: assign({
+      writeStrokes: ({ context }) =>
+        context.strokesRef.current.map((stroke) => ({
+          ...stroke,
+          points: stroke.points.map((point) => ({ ...point })),
+        })),
+      writeRevision: ({ context }) => context.revision,
+    }),
+    markSaved: assign({ savedRevision: ({ context }) => context.writeRevision }),
+    requestClose: assign({
+      pendingIntent: () => 'close' as const,
+      intentPauseNeeded: () => true,
+    }),
+    requestNewNote: assign({
+      pendingIntent: ({ context }) => context.pendingIntent ?? ('new-note' as const),
+      intentPauseNeeded: () => true,
+    }),
+    clearPendingIntent: assign({ pendingIntent: () => null, intentPauseNeeded: () => false }),
+    clearIntentPause: assign({ intentPauseNeeded: () => false }),
+    startPause: assign(({ context }) => {
+      if (context.pausePromise) return {};
+      const canvas = context.canvasRef.current;
+      if (!canvas) return {};
+      const pausePromise = canvas.pauseDrawing();
+      // The actor awaits this exact promise later. Consume rejection here too,
+      // so a long-running write cannot turn a failed native pause into an
+      // unhandled rejection before the actor reaches `pausing`.
+      void pausePromise.catch(() => undefined);
+      return { pausePromise };
+    }),
+    clearPausePromise: assign({ pausePromise: () => null }),
+    saveFailure: ({ context, event }) => {
+      console.error('[note:persistence] save failed; retaining allocated URI', event);
+      if (!context.currentBackgrounded && context.pendingIntent !== null) {
+        context.canvasRef.current?.resumeDrawing();
+      }
+    },
+    clearResetStrokes: ({ context }) => {
+      context.strokesRef.current = [];
+    },
+    resetContext: assign({
+      fileUri: () => null,
+      loadedStrokes: () => [],
+      revision: () => 0,
+      writeStrokes: () => [],
+      writeRevision: () => 0,
+      savedRevision: () => 0,
+      pendingIntent: () => null,
+      intentPauseNeeded: () => false,
+      pausePromise: () => null,
+    }),
+    markBackground: assign({ currentBackgrounded: () => true }),
+    markBackgroundAndNeedPause: assign({
+      currentBackgrounded: () => true,
+      intentPauseNeeded: () => true,
+    }),
+    markForeground: assign({
+      currentBackgrounded: () => false,
+      foregroundRestoreNeeded: () => true,
+    }),
+    markSurfaceRecreated: assign({ surfaceRecreated: () => true }),
+    clearRestoreFlags: assign({
+      foregroundRestoreNeeded: () => false,
+      surfaceRecreated: () => false,
+    }),
+    resetFailure: ({ context, event }) => {
+      console.error('[note:reset] reset failed; retaining current note', event);
+      if (!context.currentBackgrounded) {
+        context.canvasRef.current?.resumeDrawing();
+      }
     },
   },
 }).createMachine({
@@ -335,6 +492,16 @@ export const noteMachine = setup({
     // biome-ignore lint/suspicious/noExplicitAny: placeholder ref, never read in idle state
     canvasRef: { current: null } as any,
     loadedStrokes: [],
+    revision: 0,
+    writeStrokes: [],
+    writeRevision: 0,
+    savedRevision: 0,
+    pendingIntent: null,
+    intentPauseNeeded: false,
+    pausePromise: null,
+    currentBackgrounded: false,
+    foregroundRestoreNeeded: false,
+    surfaceRecreated: false,
   }),
 
   initial: 'idle',
@@ -468,18 +635,20 @@ export const noteMachine = setup({
           on: {
             STROKE_END: {
               target: 'dirty',
-              actions: 'addStroke',
+              actions: 'recordStroke',
             },
             ERASE_END: {
               target: 'dirty',
-              actions: 'eraseStrokes',
+              actions: 'recordErase',
             },
             CLOSE_NOTE: {
-              target: '#note.stopping',
+              target: '#note.saving',
+              actions: 'requestClose',
             },
+            NEW_NOTE: { target: '#note.saving', actions: 'requestNewNote' },
             APP_BACKGROUND: {
-              target: 'backgrounded',
-              actions: 'pauseDrawing',
+              target: '#note.saving.pausing',
+              actions: ['markBackgroundAndNeedPause', 'startPause'],
             },
           },
         },
@@ -489,25 +658,34 @@ export const noteMachine = setup({
             STROKE_END: {
               target: 'dirty',
               reenter: true,
-              actions: 'addStroke',
+              actions: 'recordStroke',
             },
             ERASE_END: {
               target: 'dirty',
               reenter: true,
-              actions: 'eraseStrokes',
+              actions: 'recordErase',
             },
             CLOSE_NOTE: {
-              target: '#note.closingDirty',
+              target: '#note.saving',
+              actions: ['requestClose'],
+            },
+            NEW_NOTE: {
+              target: '#note.saving',
+              actions: ['requestNewNote'],
             },
             APP_BACKGROUND: {
-              target: '#note.saving',
-              actions: ['pauseDrawing'],
+              target: '#note.saving.pausing',
+              actions: ['markBackgroundAndNeedPause', 'startPause'],
             },
           },
           after: {
             [SAVE_DEBOUNCE_MS]: {
               target: '#note.saving',
             },
+          },
+          always: {
+            guard: 'isBlankUnsaved',
+            target: 'clean',
           },
         },
 
@@ -522,6 +700,7 @@ export const noteMachine = setup({
               on: {
                 CANVAS_READY: {
                   target: 'surfaceRecreated',
+                  actions: 'markSurfaceRecreated',
                 },
               },
             },
@@ -530,13 +709,30 @@ export const noteMachine = setup({
           on: {
             APP_FOREGROUND: [
               {
+                guard: ({ context }) => context.pendingIntent !== null && context.intentPauseNeeded,
+                target: '#note.saving.pausing',
+                actions: 'markForeground',
+              },
+              {
+                guard: 'isPendingClose',
+                target: '#note.stopping',
+                actions: 'markForeground',
+              },
+              {
                 // Surface was destroyed and recreated — need startDrawing
                 // (fresh OnyxHelper) instead of resumeDrawing.
+                guard: ({ context }) => context.pendingIntent === 'new-note',
+                target: '#note.reset.running',
+                actions: 'markForeground',
+              },
+              {
                 guard: 'isSurfaceRecreated',
                 target: 'resumingFresh',
+                actions: 'markForeground',
               },
               {
                 target: 'resumingPaused',
+                actions: 'markForeground',
               },
             ],
           },
@@ -553,20 +749,34 @@ export const noteMachine = setup({
               strokes: context.strokesRef.current,
               surfaceRecreated: true,
             }),
-            onDone: {
-              target: 'clean',
-            },
-            onError: {
-              // Best-effort — go to clean so the user can at least close.
-              target: 'clean',
-            },
+            onDone: [
+              {
+                guard: 'isCurrentlyBackgrounded',
+                target: 'backgrounded',
+                actions: ['pauseDrawing'],
+              },
+              { guard: 'hasUnsavedChanges', target: 'dirty', actions: 'clearRestoreFlags' },
+              { target: 'clean', actions: 'clearRestoreFlags' },
+            ],
+            onError: [
+              {
+                guard: 'isCurrentlyBackgrounded',
+                target: 'backgrounded',
+                actions: ['pauseDrawing'],
+              },
+              { guard: 'hasUnsavedChanges', target: 'dirty', actions: 'clearRestoreFlags' },
+              { target: 'clean', actions: 'clearRestoreFlags' },
+            ],
           },
           on: {
+            APP_BACKGROUND: { actions: 'markBackground' },
+            APP_FOREGROUND: { actions: 'markForeground' },
             // Surface destroyed again during restore — restart with the
             // fresh surface (re-enter restarts the invoke).
             CANVAS_READY: {
               target: 'resumingFresh',
               reenter: true,
+              actions: 'markSurfaceRecreated',
             },
           },
         },
@@ -582,20 +792,34 @@ export const noteMachine = setup({
               strokes: context.strokesRef.current,
               surfaceRecreated: false,
             }),
-            onDone: {
-              target: 'clean',
-            },
-            onError: {
-              // Best-effort — go to clean so the user can at least close.
-              target: 'clean',
-            },
+            onDone: [
+              {
+                guard: 'isCurrentlyBackgrounded',
+                target: 'backgrounded',
+                actions: ['pauseDrawing'],
+              },
+              { guard: 'hasUnsavedChanges', target: 'dirty', actions: 'clearRestoreFlags' },
+              { target: 'clean', actions: 'clearRestoreFlags' },
+            ],
+            onError: [
+              {
+                guard: 'isCurrentlyBackgrounded',
+                target: 'backgrounded',
+                actions: ['pauseDrawing'],
+              },
+              { guard: 'hasUnsavedChanges', target: 'dirty', actions: 'clearRestoreFlags' },
+              { target: 'clean', actions: 'clearRestoreFlags' },
+            ],
           },
           on: {
+            APP_BACKGROUND: { actions: 'markBackground' },
+            APP_FOREGROUND: { actions: 'markForeground' },
             // Surface was destroyed during resume — the paused OnyxHelper
             // is stale. Transition to resumingFresh (restarts the invoke
             // with startDrawing path).
             CANVAS_READY: {
               target: 'resumingFresh',
+              actions: 'markSurfaceRecreated',
             },
           },
         },
@@ -606,113 +830,271 @@ export const noteMachine = setup({
     // The invoke lives on the parent so it runs regardless of child state.
     // Child state determines the onDone/onError target via stateIn guard.
     saving: {
-      initial: 'foreground',
+      initial: 'preparing',
       states: {
-        foreground: {
-          on: {
-            APP_BACKGROUND: {
-              target: 'backgrounding',
-              actions: 'pauseDrawing',
+        preparing: {
+          always: [
+            { guard: ({ context }) => context.pendingIntent !== null, target: 'pausing' },
+            { guard: 'hasUnsavedChanges', target: 'allocatingOrWriting' },
+            { target: '#note.editing.clean' },
+          ],
+        },
+        pausing: {
+          invoke: {
+            src: 'pauseForIntent',
+            input: ({ context }) => ({
+              canvasRef: context.canvasRef,
+              pausePromise: context.pausePromise,
+            }),
+            onDone: [
+              {
+                guard: ({ context }) =>
+                  !context.currentBackgrounded && context.pendingIntent === null,
+                target: 'deciding',
+                actions: ['clearIntentPause', 'clearPausePromise'],
+              },
+              {
+                target: 'settling',
+                actions: ['clearIntentPause', 'clearPausePromise'],
+              },
+            ],
+            onError: {
+              target: '#note.editing.dirty',
+              actions: ['clearPendingIntent', 'clearPausePromise'],
             },
           },
         },
-        backgrounding: {},
+        settling: {
+          after: { [SAVE_DEBOUNCE_MS]: 'deciding' },
+          on: {
+            // Once foregrounded, do not keep the background quiet-period
+            // delay on the way back to drawing. Background-only settling
+            // still gives late stroke events a full debounce window.
+            APP_FOREGROUND: { target: 'deciding', actions: 'markForeground' },
+            STROKE_END: {
+              target: 'settling',
+              reenter: true,
+              actions: 'recordStroke',
+            },
+            ERASE_END: {
+              target: 'settling',
+              reenter: true,
+              actions: 'recordErase',
+            },
+          },
+        },
+        deciding: {
+          always: [
+            { guard: 'hasUnsavedChanges', target: 'allocatingOrWriting' },
+            { guard: 'isCurrentlyBackgrounded', target: '#note.editing.backgrounded' },
+            { guard: 'isPendingClose', target: '#note.stopping' },
+            {
+              guard: ({ context }) => context.pendingIntent === 'new-note',
+              target: '#note.reset.running',
+            },
+            {
+              guard: 'isSurfaceRecreated',
+              target: '#note.editing.resumingFresh',
+            },
+            {
+              guard: 'needsForegroundRestore',
+              target: '#note.editing.resumingPaused',
+            },
+            { target: '#note.editing.clean' },
+          ],
+        },
+        allocatingOrWriting: {
+          always: [
+            {
+              guard: ({ context }) => context.fileUri !== null,
+              target: 'writing',
+              actions: 'assignSnapshot',
+            },
+            { target: 'allocating' },
+          ],
+        },
+        allocating: {
+          invoke: {
+            src: 'allocateDocument',
+            input: ({ context }) => ({ folderUri: context.folderUri }),
+            onDone: {
+              target: 'writing',
+              actions: [assign({ fileUri: ({ event }) => event.output.fileUri }), 'assignSnapshot'],
+            },
+            onError: [
+              {
+                guard: 'isCurrentlyBackgrounded',
+                target: '#note.editing.backgrounded',
+                actions: ['saveFailure', 'clearPendingIntent', 'clearPausePromise'],
+              },
+              {
+                target: '#note.editing.dirty',
+                actions: ['saveFailure', 'clearPendingIntent', 'clearPausePromise'],
+              },
+            ],
+          },
+        },
+        writing: {
+          invoke: {
+            src: 'saveSnapshot',
+            input: ({ context }) => ({
+              fileUri: context.fileUri as string,
+              strokes: context.writeStrokes,
+              width: context.width,
+              height: context.height,
+              backgroundPattern: context.backgroundPattern,
+            }),
+            onDone: [
+              {
+                guard: 'hasNewerRevision',
+                target: 'writing',
+                reenter: true,
+                actions: ['markSaved', 'assignSnapshot'],
+              },
+              {
+                guard: ({ context }) => context.intentPauseNeeded,
+                target: 'pausing',
+                actions: 'markSaved',
+              },
+              {
+                guard: 'isCurrentlyBackgrounded',
+                target: '#note.editing.backgrounded',
+                actions: 'markSaved',
+              },
+              { guard: 'isPendingClose', target: '#note.stopping' },
+              {
+                guard: ({ context }) => context.pendingIntent === 'new-note',
+                target: '#note.reset.running',
+                actions: 'markSaved',
+              },
+              {
+                guard: ({ context }) => context.surfaceRecreated,
+                target: '#note.editing.resumingFresh',
+                actions: 'markSaved',
+              },
+              {
+                guard: 'needsForegroundRestore',
+                target: '#note.editing.resumingPaused',
+                actions: 'markSaved',
+              },
+              { target: '#note.editing.clean', actions: 'markSaved' },
+            ],
+            onError: [
+              {
+                guard: 'isCurrentlyBackgrounded',
+                target: '#note.editing.backgrounded',
+                actions: ['saveFailure', 'clearPendingIntent', 'clearPausePromise'],
+              },
+              {
+                target: '#note.editing.dirty',
+                actions: ['saveFailure', 'clearPendingIntent', 'clearPausePromise'],
+              },
+            ],
+          },
+        },
       },
       on: {
-        // Strokes arriving mid-save cancel the in-flight save (exiting
-        // the state stops the invoke) and go back to dirty, where the
-        // debounce timer re-saves with the complete stroke set.
-        STROKE_END: {
-          target: 'editing.dirty',
-          actions: 'addStroke',
-        },
-        ERASE_END: {
-          target: 'editing.dirty',
-          actions: 'eraseStrokes',
-        },
-      },
-      invoke: {
-        src: 'serializeAndSave',
-        input: ({ context }) => ({
-          fileUri: context.fileUri,
-          folderUri: context.folderUri,
-          strokesRef: context.strokesRef,
-          width: context.width,
-          height: context.height,
-          backgroundPattern: context.backgroundPattern,
-        }),
-        onDone: [
-          {
-            guard: 'isBackgrounding',
-            target: 'editing.backgrounded',
-            actions: assign({
-              fileUri: ({ event }) => event.output.fileUri,
-            }),
-          },
-          {
-            target: 'editing.clean',
-            actions: assign({
-              fileUri: ({ event }) => event.output.fileUri,
-            }),
-          },
-        ],
-        onError: [
-          {
-            guard: 'isBackgrounding',
-            target: 'editing.backgrounded',
-          },
-          {
-            target: 'editing.dirty',
-          },
-        ],
+        STROKE_END: { actions: 'recordStroke' },
+        ERASE_END: { actions: 'recordErase' },
+        CLOSE_NOTE: { actions: ['requestClose'] },
+        NEW_NOTE: { actions: ['requestNewNote'] },
+        APP_BACKGROUND: { actions: ['markBackgroundAndNeedPause', 'startPause'] },
+        APP_FOREGROUND: { actions: 'markForeground' },
+        CANVAS_READY: { actions: 'markSurfaceRecreated' },
       },
     },
 
-    // Wait for late-arriving strokes before flushing to disk.
-    // Each stroke resets the timer. After 1s of silence, flush.
-    // Entry stops raw drawing so the e-ink screen unfreezes and the
-    // "Saving…" overlay becomes visible immediately.
-    closingDirty: {
-      entry: 'stopDrawing',
+    reset: {
+      initial: 'running',
+      states: {
+        running: {
+          invoke: {
+            src: 'resetCanvas',
+            input: ({ context }) => ({ canvasRef: context.canvasRef }),
+            onDone: [
+              {
+                guard: 'isCurrentlyBackgrounded',
+                target: 'waitingToRestore',
+                actions: ['resetContext', 'clearResetStrokes'],
+              },
+              { target: 'restoring', actions: ['resetContext', 'clearResetStrokes'] },
+            ],
+            onError: [
+              {
+                guard: 'isCurrentlyBackgrounded',
+                target: 'waitingToRetry',
+                actions: ['clearPendingIntent', 'clearIntentPause', 'clearPausePromise'],
+              },
+              {
+                target: '#note.editing.clean',
+                actions: [
+                  'resetFailure',
+                  'clearPendingIntent',
+                  'clearIntentPause',
+                  'clearPausePromise',
+                ],
+              },
+            ],
+          },
+          on: {
+            APP_BACKGROUND: { actions: 'markBackground' },
+            APP_FOREGROUND: { actions: 'markForeground' },
+            CANVAS_READY: { actions: 'markSurfaceRecreated' },
+          },
+        },
+        waitingToRestore: {
+          on: {
+            APP_BACKGROUND: { target: 'waitingToRestore', actions: 'markBackground' },
+            CANVAS_READY: { actions: 'markSurfaceRecreated' },
+            APP_FOREGROUND: { target: 'restoring', actions: 'markForeground' },
+          },
+        },
+        waitingToRetry: {
+          on: {
+            APP_BACKGROUND: { actions: 'markBackground' },
+            CANVAS_READY: { actions: 'markSurfaceRecreated' },
+            APP_FOREGROUND: { target: 'running', actions: 'markForeground' },
+          },
+        },
+        restoring: {
+          invoke: {
+            src: 'resumeAfterReset',
+            input: ({ context }) => ({
+              canvasRef: context.canvasRef,
+              surfaceRecreated: context.surfaceRecreated,
+            }),
+            onDone: [
+              {
+                guard: 'isCurrentlyBackgrounded',
+                target: 'waitingToRestore',
+                actions: 'pauseDrawing',
+              },
+              { target: '#note.editing.clean', actions: 'clearRestoreFlags' },
+            ],
+            onError: [
+              { guard: 'isCurrentlyBackgrounded', target: 'waitingToRestore' },
+              { target: 'restoreFailed', actions: 'clearPendingIntent' },
+            ],
+          },
+          on: {
+            APP_BACKGROUND: { actions: 'markBackground' },
+            APP_FOREGROUND: { actions: 'markForeground' },
+            CANVAS_READY: { target: 'restoring', reenter: true, actions: 'markSurfaceRecreated' },
+          },
+        },
+        restoreFailed: {
+          after: { [SAVE_DEBOUNCE_MS]: 'restoring' },
+          on: {
+            APP_BACKGROUND: { target: 'waitingToRestore', actions: 'markBackground' },
+            APP_FOREGROUND: { target: 'restoring', actions: 'markForeground' },
+            CANVAS_READY: { target: 'restoring', reenter: true, actions: 'markSurfaceRecreated' },
+          },
+        },
+      },
       on: {
-        STROKE_END: {
-          target: 'closingDirty',
-          reenter: true,
-          actions: 'addStroke',
-        },
-        ERASE_END: {
-          target: 'closingDirty',
-          reenter: true,
-          actions: 'eraseStrokes',
-        },
-      },
-      after: {
-        [SAVE_DEBOUNCE_MS]: {
-          target: 'flushing',
-        },
-      },
-    },
-
-    flushing: {
-      invoke: {
-        src: 'serializeAndSave',
-        input: ({ context }) => ({
-          fileUri: context.fileUri,
-          folderUri: context.folderUri,
-          strokesRef: context.strokesRef,
-          width: context.width,
-          height: context.height,
-          backgroundPattern: context.backgroundPattern,
-        }),
-        onDone: {
-          target: 'stopping',
-          actions: assign({
-            fileUri: ({ event }) => event.output.fileUri,
-          }),
-        },
-        onError: {
-          // Best-effort save — still stop drawing and close cleanly.
-          target: 'stopping',
+        CLOSE_NOTE: {
+          target: '#note.stopping',
+          actions: 'clearPendingIntent',
         },
       },
     },
@@ -721,7 +1103,7 @@ export const noteMachine = setup({
     // Runs AFTER saving so the SVG is on disk, and BEFORE navigation
     // so the screen has settled before the document list appears.
     // Entry stops raw drawing (idempotent) so the "Saving…" overlay
-    // is visible on clean-close paths that skip closingDirty.
+    // is visible on clean-close paths.
     stopping: {
       entry: 'stopDrawing',
       invoke: {
