@@ -20,6 +20,15 @@ This project would not exist without these projects and their authors:
 The [Onyx Boox SDK](https://repo.boox.com/repository/maven-public/) is vendored
 as extracted JARs. The SDK has no published license terms.
 
+## Development with devenv and direnv
+
+On Linux, run `direnv allow` to load the project shell automatically, or use
+`devenv shell` directly. Then run `pnpm install` to install the lockfile-managed
+dependencies. devenv provides Node and pnpm; outside devenv, developers are
+responsible for installing them. Biome and ast-grep are project-local tools,
+with devenv wrappers for their Nix runtime requirements. devenv also provides
+the Android SDK required by the app.
+
 ## License
 
 GPL-3.0 — see [LICENSE](LICENSE).

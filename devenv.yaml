@@ -1,0 +1,8 @@
+shell: zsh
+
+inputs:
+  nixpkgs:
+    url: github:NixOS/nixpkgs/nixos-unstable
+
+nixpkgs:
+  allow_unfree: true

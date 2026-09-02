@@ -39,7 +39,8 @@
             "extraProguardRules": "-keep class com.onyx.android.sdk.** { *; }\n-dontwarn com.onyx.android.sdk.**"
           }
         }
-      ]
+      ],
+      "expo-status-bar"
     ],
     "experiments": {
       "typedRoutes": true,
